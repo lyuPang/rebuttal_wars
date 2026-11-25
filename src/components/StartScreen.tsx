@@ -7,6 +7,7 @@ interface Props {
   author: AuthorKind;
   onAuthor: (k: AuthorKind) => void;
   onStart: () => void;
+  onQuick: () => void;
   onHowTo: () => void;
   sfx: boolean;
   music: boolean;
@@ -19,14 +20,14 @@ function Portrait({ src, className }: { src: string; className: string }) {
   return <img className={className} src={t} alt="" draggable={false} />;
 }
 
-export function StartScreen({ author, onAuthor, onStart, onHowTo, sfx, music, onToggleSfx, onToggleMusic }: Props) {
+export function StartScreen({ author, onAuthor, onStart, onQuick, onHowTo, sfx, music, onToggleSfx, onToggleMusic }: Props) {
   return (
     <div className="start-screen stage-bg">
       <div className="title-block">
         <div className="title-small">A Bluffing Card Game of Peer Review</div>
         <h1 className="title">
           REBUTTAL WARS
-          <span className="title-sub">Reviewer #2</span>
+          <span className="title-sub">Reviewer #2 · V2</span>
         </h1>
       </div>
       <div className="start-figures">
@@ -35,7 +36,7 @@ export function StartScreen({ author, onAuthor, onStart, onHowTo, sfx, music, on
         <Portrait src={ASSETS.reviewer} className="start-reviewer" />
       </div>
       <div className="author-pick">
-        <span>选择你的作者：</span>
+        <span>Choose your author:</span>
         {(['male', 'female'] as AuthorKind[]).map((k) => (
           <button
             key={k}
@@ -45,23 +46,26 @@ export function StartScreen({ author, onAuthor, onStart, onHowTo, sfx, music, on
               onAuthor(k);
             }}
           >
-            {k === 'male' ? '作者（男）' : '作者（女）'}
+            {k === 'male' ? 'Author (M)' : 'Author (F)'}
           </button>
         ))}
       </div>
       <div className="start-menu">
         <button className="btn big primary" onClick={onStart}>
-          Start Game
+          Conference Run
+        </button>
+        <button className="btn big" onClick={onQuick}>
+          Quick Rebuttal
         </button>
         <button className="btn big" onClick={onHowTo}>
           How to Play
         </button>
         <div className="toggles">
           <button className={`btn small ${sfx ? '' : 'ghost'}`} onClick={onToggleSfx}>
-            音效：{sfx ? '开' : '关'}
+            SFX: {sfx ? 'ON' : 'OFF'}
           </button>
           <button className={`btn small ${music ? '' : 'ghost'}`} onClick={onToggleMusic}>
-            音乐：{music ? '开' : '关'}
+            Music: {music ? 'ON' : 'OFF'}
           </button>
         </div>
       </div>

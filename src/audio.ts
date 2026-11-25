@@ -1,3 +1,10 @@
+import track1 from '../asserts/music/ogg/01_paper_submission.ogg';
+import track2 from '../asserts/music/ogg/02_midnight_lab.ogg';
+import track3 from '../asserts/music/ogg/03_reviewer_1_cross_examination.ogg';
+import track4 from '../asserts/music/ogg/04_reviewer_2_final_rebuttal.ogg';
+import track5 from '../asserts/music/ogg/05_paper_accepted.ogg';
+import track6 from '../asserts/music/ogg/06_paper_rejected.ogg';
+
 export type SfxName =
   | 'click'
   | 'play'
@@ -12,6 +19,54 @@ export type SfxName =
   | 'lose'
   | 'peek'
   | 'draw';
+
+export type TrackId =
+  | 'paper_submission'
+  | 'midnight_lab'
+  | 'reviewer1'
+  | 'reviewer2'
+  | 'accepted'
+  | 'rejected';
+
+export type SceneKey =
+  | 'menu'
+  | 'paper_submission'
+  | 'route_map'
+  | 'random_event'
+  | 'card_reward'
+  | 'battle1'
+  | 'battle2'
+  | 'run_summary_accept'
+  | 'run_summary_weak_accept'
+  | 'run_summary_reject';
+
+interface TrackMeta {
+  id: TrackId;
+  url: string;
+  loop: boolean;
+}
+
+const TRACKS: Record<TrackId, TrackMeta> = {
+  paper_submission: { id: 'paper_submission', url: track1, loop: true },
+  midnight_lab: { id: 'midnight_lab', url: track2, loop: true },
+  reviewer1: { id: 'reviewer1', url: track3, loop: true },
+  reviewer2: { id: 'reviewer2', url: track4, loop: true },
+  accepted: { id: 'accepted', url: track5, loop: false },
+  rejected: { id: 'rejected', url: track6, loop: false },
+};
+
+export const SCENE_TRACK: Record<SceneKey, TrackId> = {
+  menu: 'paper_submission',
+  paper_submission: 'paper_submission',
+  route_map: 'midnight_lab',
+  random_event: 'midnight_lab',
+  card_reward: 'midnight_lab',
+  battle1: 'reviewer1',
+  battle2: 'reviewer2',
+  run_summary_accept: 'accepted',
+  run_summary_weak_accept: 'accepted',
+  run_summary_reject: 'rejected',
+};
 
 type Note = { f: number; d: number; t?: number; type?: OscillatorType; v?: number; slide?: number };
 
@@ -73,16 +128,31 @@ const SFX: Record<SfxName, Note[]> = {
   draw: [{ f: 500, d: 0.05, type: 'triangle', v: 0.1, slide: 800 }],
 };
 
-const BGM_NOTES = [
-  262, 330, 392, 330, 294, 349, 440, 349, 262, 330, 392, 523, 494, 392, 330, 294,
-];
+const CROSSFADE = 0.6;
+
+interface PlayingTrack {
+  id: TrackId;
+  source: AudioBufferSourceNode;
+  gain: GainNode;
+  startedAt: number;
+  fading: boolean;
+}
 
 class AudioManager {
   private ctx: AudioContext | null = null;
+  private master: GainNode | null = null;
+  private bgmBus: GainNode | null = null;
+  private sfxBus: GainNode | null = null;
+  private decoded = new Map<TrackId, AudioBuffer>();
+  private decoding = new Map<TrackId, Promise<AudioBuffer | null>>();
+  private current: PlayingTrack | null = null;
+  private currentScene: SceneKey | null = null;
+  private jingleTimeout: number | null = null;
+
   sfxEnabled = true;
-  musicEnabled = false;
-  private bgmTimer: number | null = null;
-  private bgmStep = 0;
+  musicEnabled = true;
+  bgmVolume = 0.3;
+  sfxVolume = 0.8;
 
   private ensure(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -90,13 +160,35 @@ class AudioManager {
       const Ctor =
         window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (!Ctor) return null;
-      this.ctx = new Ctor();
+      try {
+        this.ctx = new Ctor();
+      } catch {
+        return null;
+      }
+      this.master = this.ctx.createGain();
+      this.master.gain.value = 1;
+      this.master.connect(this.ctx.destination);
+      this.bgmBus = this.ctx.createGain();
+      this.bgmBus.gain.value = this.bgmVolume;
+      this.bgmBus.connect(this.master);
+      this.sfxBus = this.ctx.createGain();
+      this.sfxBus.gain.value = this.sfxVolume;
+      this.sfxBus.connect(this.master);
     }
-    if (this.ctx.state === 'suspended') void this.ctx.resume();
+    if (this.ctx.state === 'suspended') void this.ctx.resume().catch(() => undefined);
     return this.ctx;
   }
 
-  private tone(n: Note, base: number) {
+  unlock() {
+    this.ensure();
+    if (this.musicEnabled && this.currentScene) {
+      const scene = this.currentScene;
+      this.currentScene = null;
+      this.setScene(scene);
+    }
+  }
+
+  private tone(n: Note, base: number, dest: AudioNode) {
     const ctx = this.ctx;
     if (!ctx) return;
     const start = base + (n.t ?? 0);
@@ -109,49 +201,204 @@ class AudioManager {
     gain.gain.setValueAtTime(0.0001, start);
     gain.gain.linearRampToValueAtTime(v, start + 0.01);
     gain.gain.exponentialRampToValueAtTime(0.0001, start + n.d);
-    osc.connect(gain).connect(ctx.destination);
+    osc.connect(gain).connect(dest);
     osc.start(start);
     osc.stop(start + n.d + 0.02);
   }
 
   play(name: SfxName) {
-    if (!this.sfxEnabled) return;
+    if (!this.sfxEnabled || this.sfxVolume <= 0) return;
     const ctx = this.ensure();
-    if (!ctx) return;
+    if (!ctx || !this.sfxBus) return;
     const now = ctx.currentTime;
-    for (const n of SFX[name]) this.tone(n, now);
+    for (const n of SFX[name]) this.tone(n, now, this.sfxBus);
   }
 
   setSfx(on: boolean) {
     this.sfxEnabled = on;
   }
 
+  setSfxVolume(v: number) {
+    this.sfxVolume = Math.max(0, Math.min(1, v));
+    if (this.sfxBus) this.sfxBus.gain.value = this.sfxVolume;
+  }
+
+  setBgmVolume(v: number) {
+    this.bgmVolume = Math.max(0, Math.min(1, v));
+    if (this.bgmBus) this.bgmBus.gain.value = this.bgmVolume;
+  }
+
   setMusic(on: boolean) {
     this.musicEnabled = on;
-    if (on) this.startBgm();
-    else this.stopBgm();
+    if (!on) {
+      this.stopAll(CROSSFADE);
+      this.currentScene = null;
+    } else if (this.currentScene) {
+      const scene = this.currentScene;
+      this.currentScene = null;
+      this.setScene(scene);
+    }
   }
 
-  private startBgm() {
-    if (this.bgmTimer !== null) return;
+  private async loadTrack(id: TrackId): Promise<AudioBuffer | null> {
+    const cached = this.decoded.get(id);
+    if (cached) return cached;
+    const pending = this.decoding.get(id);
+    if (pending) return pending;
+
+    const ctx = this.ensure();
+    if (!ctx) return null;
+
+    const promise = (async () => {
+      try {
+        const res = await fetch(TRACKS[id].url);
+        const arr = await res.arrayBuffer();
+        const buf = await ctx.decodeAudioData(arr);
+        this.decoded.set(id, buf);
+        return buf;
+      } catch {
+        return null;
+      } finally {
+        this.decoding.delete(id);
+      }
+    })();
+
+    this.decoding.set(id, promise);
+    return promise;
+  }
+
+  setScene(scene: SceneKey) {
+    this.currentScene = scene;
+    if (!this.musicEnabled) return;
     const ctx = this.ensure();
     if (!ctx) return;
-    this.bgmTimer = window.setInterval(() => {
-      if (!this.ctx) return;
-      const f = BGM_NOTES[this.bgmStep % BGM_NOTES.length];
-      const now = this.ctx.currentTime;
-      this.tone({ f, d: 0.28, type: 'triangle', v: 0.035 }, now);
-      if (this.bgmStep % 4 === 0) this.tone({ f: f / 2, d: 0.9, type: 'sine', v: 0.04 }, now);
-      this.bgmStep++;
-    }, 300);
+
+    const trackId = SCENE_TRACK[scene];
+    if (this.current && this.current.id === trackId && !this.current.fading) return;
+
+    if (this.jingleTimeout !== null) {
+      window.clearTimeout(this.jingleTimeout);
+      this.jingleTimeout = null;
+    }
+
+    void this.startTrack(trackId);
   }
 
-  private stopBgm() {
-    if (this.bgmTimer !== null) {
-      window.clearInterval(this.bgmTimer);
-      this.bgmTimer = null;
+  private async startTrack(trackId: TrackId) {
+    const ctx = this.ensure();
+    if (!ctx || !this.bgmBus) return;
+
+    const buf = await this.loadTrack(trackId);
+    if (!buf) return;
+    if (!this.musicEnabled) return;
+
+    if (this.currentScene && SCENE_TRACK[this.currentScene] !== trackId) return;
+
+    if (this.current && this.current.id === trackId && !this.current.fading) return;
+
+    const meta = TRACKS[trackId];
+    const now = ctx.currentTime;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(1, now + CROSSFADE);
+    gain.connect(this.bgmBus);
+
+    const source = ctx.createBufferSource();
+    source.buffer = buf;
+    source.loop = meta.loop;
+    source.connect(gain);
+    source.start(now);
+
+    const previous = this.current;
+    const added: PlayingTrack = { id: trackId, source, gain, startedAt: now, fading: false };
+    this.current = added;
+
+    if (previous) {
+      this.fadeOut(previous, CROSSFADE);
     }
+
+    if (!meta.loop) {
+      const durationMs = Math.max(0.5, buf.duration) * 1000;
+      this.jingleTimeout = window.setTimeout(() => {
+        if (this.current === added) {
+          this.current = null;
+        }
+      }, durationMs + CROSSFADE * 1000);
+    }
+
+    source.onended = () => {
+      if (this.current === added && !meta.loop) {
+        this.current = null;
+      }
+    };
+  }
+
+  private fadeOut(track: PlayingTrack, seconds: number) {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    track.fading = true;
+    const now = ctx.currentTime;
+    try {
+      track.gain.gain.cancelScheduledValues(now);
+      track.gain.gain.setValueAtTime(Math.max(0.0001, track.gain.gain.value), now);
+      track.gain.gain.linearRampToValueAtTime(0.0001, now + seconds);
+    } catch {
+      /* ignore */
+    }
+    window.setTimeout(
+      () => {
+        try {
+          track.source.stop();
+        } catch {
+          /* already stopped */
+        }
+        try {
+          track.source.disconnect();
+          track.gain.disconnect();
+        } catch {
+          /* ignore */
+        }
+      },
+      seconds * 1000 + 80,
+    );
+  }
+
+  stopAll(fadeSeconds = CROSSFADE) {
+    if (this.jingleTimeout !== null) {
+      window.clearTimeout(this.jingleTimeout);
+      this.jingleTimeout = null;
+    }
+    const cur = this.current;
+    this.current = null;
+    if (!cur) return;
+    this.fadeOut(cur, fadeSeconds);
+  }
+
+  resetSession() {
+    this.stopAll(0.25);
+    this.currentScene = null;
+    this.decoded.clear();
+    this.decoding.clear();
+    if (this.ctx && this.ctx.state === 'running') {
+      void this.ctx.suspend().catch(() => undefined);
+    }
+  }
+
+  get activeTrack(): TrackId | null {
+    return this.current?.id ?? null;
   }
 }
 
 export const audio = new AudioManager();
+
+if (typeof window !== 'undefined') {
+  const unlock = () => {
+    audio.unlock();
+    window.removeEventListener('pointerdown', unlock);
+    window.removeEventListener('keydown', unlock);
+    window.removeEventListener('touchstart', unlock);
+  };
+  window.addEventListener('pointerdown', unlock, { once: true });
+  window.addEventListener('keydown', unlock, { once: true });
+  window.addEventListener('touchstart', unlock, { once: true });
+}

@@ -1,5 +1,6 @@
 import { DEFAULT_CONFIG, type GameConfig } from './config';
-import { buildCardDefinitions, buildDeck, CARD_IDS } from './cards';
+import { REVIEWER2_PROFILE, type ReviewerConfig } from './reviewers';
+import { buildCardDefinitions, buildDeck, CARD_IDS, BASIC_CLAIM_POOL, PLAYER_BASE_DECK } from './cards';
 import { defaultRng, pickRandom, shuffle, type Rng } from './rng';
 import type {
   CardDefinition,
@@ -13,6 +14,7 @@ import type {
   Resolution,
   Side,
   SideDelta,
+  Category,
 } from './types';
 
 export interface EngineContext {
@@ -32,8 +34,8 @@ export interface ActionResult {
 }
 
 export const SIDE_NAME: Record<Side, string> = {
-  player: '作者',
-  reviewer: 'Reviewer #2',
+  player: 'Author',
+  reviewer: 'Reviewer',
 };
 
 export function opponentOf(side: Side): Side {
@@ -48,25 +50,44 @@ export function totalShield(c: CharacterState): number {
   return c.shields.reduce((s, sh) => s + sh.amount, 0);
 }
 
+export function totalTemporaryShield(c: CharacterState): number {
+  return c.shields.filter((s) => s.kind === 'temporary').reduce((acc, s) => acc + s.amount, 0);
+}
+
+export function totalPermanentShield(c: CharacterState): number {
+  return c.shields.filter((s) => s.kind === 'permanent').reduce((acc, s) => acc + s.amount, 0);
+}
+
 function fail(state: GameState, error: string): ActionResult {
   return { ok: false, state, error };
 }
 
-function createCharacter(side: Side, ctx: EngineContext): CharacterState {
-  const { config } = ctx;
+function createCharacter(
+  side: Side,
+  hp: number,
+  maxHp: number,
+  cardCounts: Partial<Record<CardId, number>>,
+  claimPool: CardId[],
+  initialAp: number,
+  ctx: EngineContext,
+): CharacterState {
   return {
     side,
-    hp: config.initialHp,
-    maxHp: config.initialHp,
-    ap: config.initialAp,
-    maxAp: config.maxAp,
+    hp,
+    maxHp,
+    ap: initialAp,
+    maxAp: ctx.config.maxAp,
     apDebt: 0,
     shields: [],
     hand: [],
-    deck: shuffle(buildDeck(side === 'player' ? 'P' : 'R', config), ctx.rng),
+    deck: shuffle(buildDeck(side === 'player' ? 'P' : 'R', cardCounts), ctx.rng),
     discard: [],
-    typeUsage: { attack: 0, defense: 0, utility: 0 },
+    cardUsage: {},
     turnsTaken: 0,
+    crossCheckCharges: 0,
+    burdenOfProofActive: false,
+    failedChallengesThisTurn: 0,
+    claimPool: [...claimPool],
   };
 }
 
@@ -115,7 +136,11 @@ export function applyDamage(
   let remaining = amount;
   let absorbed = 0;
   if (!pierce) {
-    for (const sh of target.shields) {
+    const ordered = [...target.shields].sort((a, b) => {
+      if (a.kind === b.kind) return 0;
+      return a.kind === 'temporary' ? -1 : 1;
+    });
+    for (const sh of ordered) {
       if (remaining <= 0) break;
       const take = Math.min(sh.amount, remaining);
       sh.amount -= take;
@@ -129,9 +154,13 @@ export function applyDamage(
   return { absorbed, hpLoss };
 }
 
+export function getCardUsageCount(c: CharacterState, cardId: CardId): number {
+  return c.cardUsage[cardId] ?? 0;
+}
+
 export function getCost(c: CharacterState, cardId: CardId, ctx: EngineContext): number {
   const def = ctx.cards[cardId];
-  return def.baseCost + c.typeUsage[def.category];
+  return def.baseCost + getCardUsageCount(c, cardId);
 }
 
 export function canAffordDeclaration(c: CharacterState, cardId: CardId, ctx: EngineContext): boolean {
@@ -139,11 +168,11 @@ export function canAffordDeclaration(c: CharacterState, cardId: CardId, ctx: Eng
 }
 
 export function canPlayAnything(c: CharacterState, ctx: EngineContext): boolean {
-  return c.hand.length > 0 && CARD_IDS.some((id) => canAffordDeclaration(c, id, ctx));
+  return c.hand.length > 0 && c.claimPool.some((id) => canAffordDeclaration(c, id, ctx));
 }
 
 export function canChallenge(c: CharacterState, ctx: EngineContext): boolean {
-  return c.ap >= ctx.config.challengeMinAp;
+  return c.ap >= ctx.config.challengeMinAp || c.burdenOfProofActive;
 }
 
 function pushHistory(state: GameState, entry: Omit<HistoryEntry, 'id' | 'round'>): void {
@@ -154,31 +183,92 @@ function startTurn(state: GameState, side: Side, ctx: EngineContext): void {
   const c = state[side];
   state.activeSide = side;
   state.phase = side === 'player' ? 'player_turn' : 'reviewer_turn';
-  let text = `—— 第 ${state.round} 轮：${SIDE_NAME[side]} 的回合 ——`;
+  c.failedChallengesThisTurn = 0;
+
+  const actorLabel = side === 'player' ? 'Author' : state.reviewerName;
+  let text = `—— Round ${state.round}: ${actorLabel}'s turn ——`;
+
   if (c.turnsTaken > 0) {
     c.shields = c.shields.filter((sh) => sh.expires !== 'owner_turn_start');
-    c.typeUsage = { attack: 0, defense: 0, utility: 0 };
+    c.cardUsage = {};
     const { repaid, gained } = gainAp(c, ctx.config.apRecoveryPerTurn);
     const drawn = drawCards(c, ctx.config.drawPerTurn, ctx);
-    const parts = [`恢复 ${gained} AP`];
-    if (repaid > 0) parts.push(`偿还欠额 ${repaid}`);
-    parts.push(`抽 ${drawn} 张牌`);
-    text += `（${parts.join('，')}）`;
+    const parts = [`+${gained} AP`];
+    if (repaid > 0) parts.push(`debt repaid ${repaid}`);
+    parts.push(`drew ${drawn}`);
+    text += ` (${parts.join(', ')})`;
   }
   c.turnsTaken++;
   pushHistory(state, { kind: 'turn', actorSide: side, text });
 }
 
-export function createGame(ctx: EngineContext = makeContext()): GameState {
-  const player = createCharacter('player', ctx);
-  const reviewer = createCharacter('reviewer', ctx);
+export interface CreateGameOptions {
+  reviewerProfile?: ReviewerConfig;
+  playerHp?: number;
+  playerMaxHp?: number;
+  playerDeck?: Partial<Record<CardId, number>>;
+  playerClaimPool?: CardId[];
+  startingApDelta?: number;
+  startingHandDelta?: number;
+  startingCrossCheckCharges?: number;
+  opponentSuspicionDelta?: number;
+}
+
+export function createGame(ctx: EngineContext = makeContext(), options: CreateGameOptions = {}): GameState {
+  const {
+    reviewerProfile = REVIEWER2_PROFILE,
+    playerHp = ctx.config.initialHp,
+    playerMaxHp = ctx.config.initialHp,
+    playerDeck = PLAYER_BASE_DECK,
+    playerClaimPool = [...BASIC_CLAIM_POOL],
+    startingApDelta = 0,
+    startingHandDelta = 0,
+    startingCrossCheckCharges = 0,
+    opponentSuspicionDelta = 0,
+  } = options;
+
+  const revCfg = reviewerProfile.gameConfig;
+  const revCtx = makeContext(revCfg, ctx.rng);
+
+  const playerInitAp = Math.min(ctx.config.maxAp, Math.max(0, ctx.config.initialAp + startingApDelta));
+  const playerInitHand = Math.min(ctx.config.handLimit, Math.max(0, ctx.config.initialHandSize + startingHandDelta));
+
+  const reviewerInitSuspicion = Math.max(
+    revCfg.suspicion.min,
+    Math.min(revCfg.suspicion.max, revCfg.suspicion.initial + opponentSuspicionDelta),
+  );
+
+  const player = createCharacter(
+    'player',
+    playerHp,
+    playerMaxHp,
+    playerDeck,
+    playerClaimPool,
+    playerInitAp,
+    ctx,
+  );
+
+  const reviewer = createCharacter(
+    'reviewer',
+    revCfg.reviewerHp,
+    revCfg.reviewerHp,
+    revCfg.deck,
+    reviewerProfile.claimPool,
+    revCfg.reviewerInitialAp,
+    revCtx,
+  );
+
+  if (startingCrossCheckCharges > 0) {
+    player.crossCheckCharges += startingCrossCheckCharges;
+  }
+
   const state: GameState = {
     phase: 'player_turn',
     round: 1,
     activeSide: 'player',
     player,
     reviewer,
-    suspicion: ctx.config.suspicion.initial,
+    suspicion: reviewerInitSuspicion,
     pendingPlay: null,
     lastResolution: null,
     history: [],
@@ -193,12 +283,14 @@ export function createGame(ctx: EngineContext = makeContext()): GameState {
       playerCardsPlayed: 0,
       reviewerCardsPlayed: 0,
     },
-    reviewerMemory: { observedPlayerCards: [] },
+    reviewerMemory: { observedPlayerCards: [], crossCheckRevealedThisPlay: null },
     nextId: 1,
+    reviewerName: reviewerProfile.name,
   };
-  drawCards(player, ctx.config.initialHandSize, ctx);
-  drawCards(reviewer, ctx.config.initialHandSize, ctx);
-  pushHistory(state, { kind: 'system', text: '论文已提交。Reviewer #2 已就位。Rebuttal 开始！' });
+
+  drawCards(player, playerInitHand, ctx);
+  drawCards(reviewer, revCfg.initialHandSize, revCtx);
+  pushHistory(state, { kind: 'system', text: `Paper submitted. ${reviewerProfile.name} is ready. Rebuttal begins!` });
   startTurn(state, 'player', ctx);
   return state;
 }
@@ -210,7 +302,13 @@ export function challengeProbability(suspicion: number, config: GameConfig = DEF
 export function getPublicPlayInfo(state: GameState): PublicPlayInfo | null {
   const p = state.pendingPlay;
   if (!p) return null;
-  return { id: p.id, actorSide: p.actorSide, declaredCardId: p.declaredCardId, declaredCost: p.declaredCost };
+  return {
+    id: p.id,
+    actorSide: p.actorSide,
+    declaredCardId: p.declaredCardId,
+    declaredCost: p.declaredCost,
+    crossCheckRevealedCategory: p.crossCheckRevealedCategory,
+  };
 }
 
 export function declarePlay(
@@ -220,22 +318,39 @@ export function declarePlay(
   declaredCardId: CardId,
   ctx: EngineContext = makeContext(),
 ): ActionResult {
-  if (state.result || state.phase === 'game_over') return fail(state, '游戏已结束');
+  if (state.result || state.phase === 'game_over') return fail(state, 'Game over');
   const expectedPhase = side === 'player' ? 'player_turn' : 'reviewer_turn';
-  if (state.phase !== expectedPhase || state.activeSide !== side) return fail(state, '现在不是该角色的出牌阶段');
-  if (state.pendingPlay) return fail(state, '已有待结算的出牌');
-  if (!CARD_IDS.includes(declaredCardId)) return fail(state, '无效的宣称');
+  if (state.phase !== expectedPhase || state.activeSide !== side) return fail(state, 'Not your turn');
+  if (state.pendingPlay) return fail(state, 'Already a pending play');
+
   const s = clone(state);
   const c = s[side];
+
+  if (!c.claimPool.includes(declaredCardId)) return fail(state, 'Card not in claim pool');
+  if (!CARD_IDS.includes(declaredCardId)) return fail(state, 'Invalid card id');
+
   const idx = c.hand.findIndex((h) => h.instanceId === instanceId);
-  if (idx < 0) return fail(state, '手牌中没有这张牌');
+  if (idx < 0) return fail(state, 'Card not in hand');
+
   const declaredCost = getCost(c, declaredCardId, ctx);
-  if (c.ap < declaredCost) return fail(state, 'AP 不足以支付宣称费用');
+  if (c.ap < declaredCost) return fail(state, 'Not enough AP');
 
   const [card] = c.hand.splice(idx, 1);
-  const actualTypeCostSnapshot = getCost(c, card.cardId, ctx);
+  const actualCostSnapshot = getCost(c, card.cardId, ctx);
   spendAp(c, declaredCost);
-  c.typeUsage[ctx.cards[declaredCardId].category]++;
+  c.cardUsage[declaredCardId] = (c.cardUsage[declaredCardId] ?? 0) + 1;
+
+  const responderSide = opponentOf(side);
+  const responder = s[responderSide];
+
+  let crossCheckRevealedCategory: Category | null = null;
+  if (responder.crossCheckCharges > 0) {
+    responder.crossCheckCharges--;
+    crossCheckRevealedCategory = ctx.cards[card.cardId].category;
+    s.reviewerMemory = { ...s.reviewerMemory, crossCheckRevealedThisPlay: crossCheckRevealedCategory };
+  } else {
+    s.reviewerMemory = { ...s.reviewerMemory, crossCheckRevealedThisPlay: null };
+  }
 
   const pending: PendingPlay = {
     id: s.nextId++,
@@ -244,8 +359,9 @@ export function declarePlay(
     actualCardId: card.cardId,
     declaredCardId,
     declaredCost,
-    actualTypeCostSnapshot,
+    actualCostSnapshot,
     challengeStatus: 'pending',
+    crossCheckRevealedCategory,
   };
   s.pendingPlay = pending;
   s.lastResolution = null;
@@ -273,13 +389,13 @@ function checkHpResult(s: GameState): GameResult | null {
   return null;
 }
 
-function describeDelta(side: Side, d: SideDelta): string {
+function describeDelta(name: string, d: SideDelta): string {
   const parts: string[] = [];
   if (d.hp) parts.push(`HP ${d.hp > 0 ? '+' : ''}${d.hp}`);
   if (d.ap) parts.push(`AP ${d.ap > 0 ? '+' : ''}${d.ap}`);
-  if (d.apDebt) parts.push(`欠额 ${d.apDebt > 0 ? '+' : ''}${d.apDebt}`);
-  if (d.shield) parts.push(`护盾 ${d.shield > 0 ? '+' : ''}${d.shield}`);
-  return parts.length ? `${SIDE_NAME[side]}：${parts.join('，')}` : '';
+  if (d.apDebt) parts.push(`debt ${d.apDebt > 0 ? '+' : ''}${d.apDebt}`);
+  if (d.shield) parts.push(`shield ${d.shield > 0 ? '+' : ''}${d.shield}`);
+  return parts.length ? `${name}: ${parts.join(', ')}` : '';
 }
 
 export function respondToPlay(
@@ -287,37 +403,44 @@ export function respondToPlay(
   challenge: boolean,
   ctx: EngineContext = makeContext(),
 ): ActionResult {
-  if (state.result || state.phase === 'game_over') return fail(state, '游戏已结束');
+  if (state.result || state.phase === 'game_over') return fail(state, 'Game over');
   const p = state.pendingPlay;
-  if (!p) return fail(state, '没有待响应的出牌');
+  if (!p) return fail(state, 'No pending play');
   const expectedPhase = p.actorSide === 'player' ? 'awaiting_reviewer_challenge' : 'awaiting_player_challenge';
-  if (state.phase !== expectedPhase) return fail(state, '当前不在响应阶段');
+  if (state.phase !== expectedPhase) return fail(state, 'Wrong phase');
   const responderSide = opponentOf(p.actorSide);
-  if (challenge && !canChallenge(state[responderSide], ctx)) return fail(state, 'AP 不足，无法质疑');
+
+  if (challenge && !canChallenge(state[responderSide], ctx)) return fail(state, 'Not enough AP to challenge');
 
   const s = clone(state);
   s.phase = 'resolving_action';
   const pending = s.pendingPlay!;
   const actor = s[pending.actorSide];
-  const responder = s[responderSide];
+  const resp = s[responderSide];
   const before = { player: snapshot(s.player), reviewer: snapshot(s.reviewer) };
   const { config } = ctx;
 
   const isTruthful = pending.actualCardId === pending.declaredCardId;
   let executed: CardId = pending.declaredCardId;
   let extraCost = 0;
+  let usedBurdenOfProof = false;
 
   if (!challenge) {
     pending.challengeStatus = 'accepted';
     if (pending.actorSide === 'player' && !isTruthful) s.stats.playerSuccessfulBluffs++;
   } else if (!isTruthful) {
     pending.challengeStatus = 'challenge_success';
-    gainAp(responder, config.challengeReward);
-    extraCost = Math.max(0, pending.actualTypeCostSnapshot - pending.declaredCost) + config.bluffCaughtPenalty;
+    const usingBurden = resp.burdenOfProofActive && resp.ap < config.challengeMinAp;
+    if (usingBurden) {
+      usedBurdenOfProof = true;
+      resp.burdenOfProofActive = false;
+      gainAp(resp, config.burdenOfProofChallengeReward);
+    } else {
+      gainAp(resp, config.challengeReward);
+    }
+    extraCost = Math.max(0, pending.actualCostSnapshot - pending.declaredCost) + config.bluffCaughtPenalty;
     spendAp(actor, extraCost);
-    const actualCat = ctx.cards[pending.actualCardId].category;
-    const declaredCat = ctx.cards[pending.declaredCardId].category;
-    if (actualCat !== declaredCat) actor.typeUsage[actualCat]++;
+    actor.cardUsage[pending.actualCardId] = (actor.cardUsage[pending.actualCardId] ?? 0) + 1;
     executed = pending.actualCardId;
     if (responderSide === 'reviewer') {
       s.suspicion = clampSuspicion(s.suspicion + config.suspicion.onCatchBluff, config);
@@ -328,7 +451,14 @@ export function respondToPlay(
     }
   } else {
     pending.challengeStatus = 'challenge_failed';
-    spendAp(responder, config.challengeFailPenalty);
+    resp.failedChallengesThisTurn++;
+    const usingBurden = resp.burdenOfProofActive && resp.ap < config.challengeMinAp;
+    if (usingBurden) {
+      usedBurdenOfProof = true;
+      resp.burdenOfProofActive = false;
+    } else {
+      spendAp(resp, config.challengeFailPenalty);
+    }
     if (responderSide === 'reviewer') {
       s.suspicion = clampSuspicion(s.suspicion + config.suspicion.onFalseAccusation, config);
       s.stats.reviewerWrongChallenges++;
@@ -346,38 +476,60 @@ export function respondToPlay(
     revealedCardId: challenge ? pending.actualCardId : null,
     executedCardId: executed,
     extraCost,
+    usedBurdenOfProof,
     deltas: { player: before.player, reviewer: before.reviewer },
   };
 
   const effect = ctx.cards[executed].effect;
   const target = s[opponentOf(pending.actorSide)];
+  const actorLabel = pending.actorSide === 'player' ? 'Author' : s.reviewerName;
   const effectParts: string[] = [];
+
   switch (effect.kind) {
     case 'damage': {
       const r = applyDamage(target, effect.amount, effect.pierce);
       resolution.damage = { target: target.side, ...r, pierce: effect.pierce };
       effectParts.push(
         r.absorbed > 0
-          ? `护盾抵挡 ${r.absorbed}，${SIDE_NAME[target.side]} 失去 ${r.hpLoss} HP`
-          : `${SIDE_NAME[target.side]} 失去 ${r.hpLoss} HP${effect.pierce ? '（穿透）' : ''}`,
+          ? `Shield absorbed ${r.absorbed}, ${target.side === 'player' ? 'Author' : s.reviewerName} lost ${r.hpLoss} HP`
+          : `${target.side === 'player' ? 'Author' : s.reviewerName} lost ${r.hpLoss} HP${effect.pierce ? ' (pierce)' : ''}`,
+      );
+      break;
+    }
+    case 'damage_conditional': {
+      let dmgAmount = effect.baseAmount;
+      let triggeredBonus = false;
+      if (effect.condition === 'opponent_failed_challenge_this_turn') {
+        if (target.failedChallengesThisTurn > 0) {
+          dmgAmount += effect.bonusAmount;
+          triggeredBonus = true;
+        }
+      } else if (effect.condition === 'self_bluff_caught') {
+        if (pending.challengeStatus === 'challenge_success' && pending.actualCardId === 'red_herring') {
+          dmgAmount += effect.bonusAmount;
+          triggeredBonus = true;
+        }
+      }
+      const r = applyDamage(target, dmgAmount, false);
+      resolution.damage = { target: target.side, ...r, pierce: false };
+      effectParts.push(
+        `${target.side === 'player' ? 'Author' : s.reviewerName} lost ${r.hpLoss} HP${triggeredBonus ? ' (+bonus!)' : ''}`,
       );
       break;
     }
     case 'shield': {
-      actor.shields.push({
-        id: `sh-${s.nextId++}`,
-        amount: effect.amount,
-        kind: 'temporary',
-        expires: 'owner_turn_start',
-      });
-      resolution.shieldGained = effect.amount;
-      effectParts.push(`${SIDE_NAME[actor.side]} 获得 ${effect.amount} 点护盾`);
+      const kind = effect.permanent ? 'permanent' : 'temporary';
+      const expires = effect.permanent ? ('never' as const) : ('owner_turn_start' as const);
+      actor.shields.push({ id: `sh-${s.nextId++}`, amount: effect.amount, kind, expires });
+      if (effect.permanent) resolution.permanentShieldGained = effect.amount;
+      else resolution.shieldGained = effect.amount;
+      effectParts.push(`${actorLabel} gained ${effect.amount} ${kind} shield`);
       break;
     }
     case 'draw': {
       const n = drawCards(actor, effect.amount, ctx);
       resolution.cardsDrawn = n;
-      effectParts.push(`${SIDE_NAME[actor.side]} 抽了 ${n} 张牌`);
+      effectParts.push(`${actorLabel} drew ${n} card(s)`);
       break;
     }
     case 'gain_ap': {
@@ -385,7 +537,7 @@ export function respondToPlay(
       resolution.apGained = r.gained;
       resolution.apDebtRepaid = r.repaid;
       effectParts.push(
-        `${SIDE_NAME[actor.side]} 恢复 ${r.gained} AP${r.repaid ? `（偿还欠额 ${r.repaid}）` : ''}`,
+        `${actorLabel} recovered ${r.gained} AP${r.repaid ? ` (debt repaid ${r.repaid})` : ''}`,
       );
       break;
     }
@@ -399,7 +551,23 @@ export function respondToPlay(
           round: s.round,
         });
       }
-      effectParts.push(peeked ? `${SIDE_NAME[actor.side]} 偷看了对方一张手牌` : '对方没有手牌，调查无果');
+      effectParts.push(peeked ? `${actorLabel} peeked at a card` : 'No cards to peek at');
+      break;
+    }
+    case 'cross_check': {
+      actor.crossCheckCharges++;
+      resolution.crossCheckGranted = true;
+      effectParts.push(`${actorLabel} gained 1 Cross-check charge`);
+      break;
+    }
+    case 'burden_of_proof': {
+      if (!actor.burdenOfProofActive) {
+        actor.burdenOfProofActive = true;
+        resolution.burdenOfProofGranted = true;
+        effectParts.push(`${actorLabel} gained Burden of Proof`);
+      } else {
+        effectParts.push('Burden of Proof already active');
+      }
       break;
     }
   }
@@ -413,15 +581,19 @@ export function respondToPlay(
   actor.discard.push({ instanceId: pending.actualCardInstanceId, cardId: pending.actualCardId });
 
   const declaredName = ctx.cards[pending.declaredCardId].name;
-  let head = `${SIDE_NAME[pending.actorSide]} 宣称 ${declaredName}`;
-  if (!challenge) head += ` → ${SIDE_NAME[responderSide]} 接受`;
+  const actorName = pending.actorSide === 'player' ? 'Author' : s.reviewerName;
+  const respName = pending.actorSide === 'player' ? s.reviewerName : 'Author';
+  let head = `${actorName} declares ${declaredName}`;
+  if (!challenge) head += ` → ${respName} accepts`;
   else if (pending.challengeStatus === 'challenge_success')
-    head += ` → ${SIDE_NAME[responderSide]} 质疑成功！真实卡牌是 ${ctx.cards[pending.actualCardId].name}（额外扣 ${extraCost} AP）`;
-  else head += ` → ${SIDE_NAME[responderSide]} 质疑失败！确实是 ${declaredName}`;
+    head += ` → ${respName} challenges! Bluff caught! (actual: ${ctx.cards[pending.actualCardId].name}, extra: ${extraCost} AP)`;
+  else head += ` → ${respName} challenges! False accusation! (really was ${declaredName})`;
+
   const deltaText = (['player', 'reviewer'] as Side[])
-    .map((sd) => describeDelta(sd, resolution.deltas[sd]))
+    .map((sd) => describeDelta(sd === 'player' ? 'Author' : s.reviewerName, resolution.deltas[sd]))
     .filter(Boolean)
-    .join('；');
+    .join('; ');
+
   pushHistory(s, {
     kind: 'play',
     actorSide: pending.actorSide,
@@ -431,7 +603,7 @@ export function respondToPlay(
     revealedCardId: resolution.revealedCardId,
     executedCardId: executed,
     deltas: resolution.deltas,
-    text: `${head}。效果：${effectParts.join('；')}${deltaText ? `。【${deltaText}】` : ''}`,
+    text: `${head}. Effect: ${effectParts.join('; ')}${deltaText ? `. [${deltaText}]` : ''}`,
   });
 
   s.lastResolution = resolution;
@@ -448,7 +620,7 @@ function finishGame(s: GameState, result: GameResult): void {
   s.result = result;
   s.phase = 'game_over';
   const label = result.outcome === 'accept' ? 'Accept' : result.outcome === 'weak_accept' ? 'Weak Accept' : 'Reject';
-  pushHistory(s, { kind: 'system', text: `游戏结束：${label}` });
+  pushHistory(s, { kind: 'system', text: `Battle over: ${label}` });
 }
 
 export function deadlineOutcome(playerHp: number, reviewerHp: number): GameResult {
@@ -458,17 +630,26 @@ export function deadlineOutcome(playerHp: number, reviewerHp: number): GameResul
 }
 
 export function endTurn(state: GameState, side: Side, ctx: EngineContext = makeContext()): ActionResult {
-  if (state.result || state.phase === 'game_over') return fail(state, '游戏已结束');
+  if (state.result || state.phase === 'game_over') return fail(state, 'Game over');
   const expectedPhase = side === 'player' ? 'player_turn' : 'reviewer_turn';
-  if (state.phase !== expectedPhase || state.activeSide !== side) return fail(state, '现在不能结束回合');
-  if (state.pendingPlay) return fail(state, '还有待结算的出牌');
+  if (state.phase !== expectedPhase || state.activeSide !== side) return fail(state, 'Cannot end turn now');
+  if (state.pendingPlay) return fail(state, 'Pending play');
+
   const s = clone(state);
   s.lastResolution = null;
-  pushHistory(s, { kind: 'system', actorSide: side, text: `${SIDE_NAME[side]} 结束回合` });
+  const actorName = side === 'player' ? 'Author' : s.reviewerName;
+  pushHistory(s, { kind: 'system', actorSide: side, text: `${actorName} ends their turn` });
+
+  const opSide = opponentOf(side);
+  const opponent = s[opSide];
+  if (opponent.burdenOfProofActive) {
+    opponent.burdenOfProofActive = false;
+  }
+
   if (side === 'player') {
     startTurn(s, 'reviewer', ctx);
   } else if (s.round >= ctx.config.maxRounds) {
-    pushHistory(s, { kind: 'system', text: 'Rebuttal Deadline！比较双方 HP。' });
+    pushHistory(s, { kind: 'system', text: 'Rebuttal Deadline! Comparing HP...' });
     finishGame(s, deadlineOutcome(s.player.hp, s.reviewer.hp));
   } else {
     s.round++;

@@ -8,8 +8,13 @@ export const ASSETS = {
   authorMale,
   authorFemale,
   reviewer,
+  reviewer1: reviewer,
 };
 
 export function authorImage(kind: AuthorKind): string {
   return kind === 'male' ? authorMale : authorFemale;
+}
+
+export function reviewerImage(): string {
+  return reviewer;
 }

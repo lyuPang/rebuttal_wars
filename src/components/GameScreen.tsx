@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CARDS } from '../game/cards';
+import { CARDS, CATEGORY_LABEL } from '../game/cards';
 import {
   canChallenge,
   canPlayAnything,
@@ -10,17 +10,19 @@ import {
   makeContext,
   opponentOf,
   respondToPlay,
-  totalShield,
+  totalPermanentShield,
+  totalTemporaryShield,
 } from '../game/engine';
 import { buildChallengeView, buildReviewerView, decideReviewerAction, decideReviewerChallenge } from '../game/ai';
 import type { CardId, CardInstance, GameState, Resolution, Side } from '../game/types';
+import type { ReviewerConfig } from '../game/reviewers';
+import type { RenderOptions } from '../game/run';
 import { audio } from '../audio';
 import { ASSETS, authorImage, type AuthorKind } from '../assets';
 import { Character, type CharStatus, type FloatText } from './Character';
 import { StatusBar } from './StatusBar';
 import { DeclareModal } from './DeclareModal';
 import { ActionLog } from './ActionLog';
-import { GameOver } from './GameOver';
 import { CardBack, CardFace } from './Card';
 
 interface StageCard {
@@ -38,26 +40,35 @@ interface Banner {
   kind: 'caught' | 'false' | 'accepted' | 'info';
 }
 
-const REVIEWER_LINES: Record<CardId, string[]> = {
-  argument: ['The baselines are clearly outdated.', 'Section 3 is confusing.'],
-  critical_point: ['This is a fatal flaw.', 'The main claim is NOT supported.'],
-  evidence: ['As I stated in my review...', 'Prior work already did this.'],
-  strong_evidence: ['I am an expert in this area.', 'See my 2009 paper.'],
-  additional_experiment: ['I need more ablations.', 'Let me re-read the appendix.'],
-  revision: ['I have updated my review.', 'Let me reconsider... no.'],
-  investigation: ['Let me check your code.', 'Where is the GitHub link?'],
-};
-
-const THINK_LINES = ['Hmm...', 'Suspicious...', 'Let me think.', 'Really?'];
-
 interface Props {
   author: AuthorKind;
+  reviewerProfile: ReviewerConfig;
+  render: RenderOptions;
+  onBattleEnd: (result: {
+    outcome: 'accept' | 'weak_accept' | 'reject';
+    playerHp: number;
+    rounds: number;
+    stats: GameState['stats'];
+  }) => void;
   onMenu: () => void;
 }
 
-export function GameScreen({ author, onMenu }: Props) {
-  const ctx = useMemo(() => makeContext(), []);
-  const [game, setGame] = useState<GameState>(() => createGame(ctx));
+export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMenu }: Props) {
+  const ctx = useMemo(() => makeContext(reviewerProfile.gameConfig), [reviewerProfile]);
+
+  const [game, setGame] = useState<GameState>(() =>
+    createGame(ctx, {
+      reviewerProfile,
+      playerHp: render.playerHp,
+      playerMaxHp: render.playerMaxHp,
+      playerDeck: render.deck,
+      playerClaimPool: render.claimPool,
+      startingApDelta: render.pendingBattleModifiers.startingApDelta,
+      startingHandDelta: render.pendingBattleModifiers.startingHandDelta,
+      startingCrossCheckCharges: render.pendingBattleModifiers.startingCrossCheckCharges,
+      opponentSuspicionDelta: render.pendingBattleModifiers.opponentSuspicionDelta,
+    }),
+  );
   const gameRef = useRef(game);
   const [busy, setBusyState] = useState(false);
   const busyRef = useRef(false);
@@ -74,11 +85,13 @@ export function GameScreen({ author, onMenu }: Props) {
   const [peek, setPeek] = useState<{ cardId: CardId | null } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [logOpen, setLogOpen] = useState(false);
-  const [showGameOver, setShowGameOver] = useState(false);
+  const [crossCheckNotice, setCrossCheckNotice] = useState<{ category: string; mismatch: boolean } | null>(null);
+  const endedRef = useRef(false);
   const floatId = useRef(1);
   const stageKey = useRef(1);
 
   const authorImg = authorImage(author);
+  const reviewerImg = reviewerProfile.id === 'reviewer1' ? ASSETS.reviewer1 : ASSETS.reviewer;
 
   const commit = useCallback((s: GameState) => {
     gameRef.current = s;
@@ -100,12 +113,15 @@ export function GameScreen({ author, onMenu }: Props) {
     };
   }, []);
 
-  const showTurnBanner = useCallback(async (side: Side) => {
-    setTurnBanner(side === 'player' ? 'YOUR TURN' : "REVIEWER #2'S TURN");
-    audio.play('turn');
-    await wait(900);
-    if (aliveRef.current) setTurnBanner(null);
-  }, []);
+  const showTurnBanner = useCallback(
+    async (side: Side) => {
+      setTurnBanner(side === 'player' ? 'YOUR TURN' : `${reviewerProfile.name.toUpperCase()}'S TURN`);
+      audio.play('turn');
+      await wait(900);
+      if (aliveRef.current) setTurnBanner(null);
+    },
+    [reviewerProfile.name],
+  );
 
   useEffect(() => {
     void showTurnBanner('player');
@@ -118,18 +134,24 @@ export function GameScreen({ author, onMenu }: Props) {
       const mk = (text: string, kind: FloatText['kind'], positive: boolean) =>
         items.push({ id: floatId.current++, side, text, kind, positive });
       if (d.hp) mk(`${d.hp > 0 ? '+' : ''}${d.hp} HP`, 'hp', d.hp > 0);
-      if (d.shield) mk(`${d.shield > 0 ? '+' : ''}${d.shield} 护盾`, 'shield', d.shield > 0);
+      if (d.shield) mk(`${d.shield > 0 ? '+' : ''}${d.shield} Shield`, 'shield', d.shield > 0);
       if (d.ap) mk(`${d.ap > 0 ? '+' : ''}${d.ap} AP`, 'ap', d.ap > 0);
-      if (d.apDebt) mk(`欠额 ${d.apDebt > 0 ? '+' : ''}${d.apDebt}`, 'debt', d.apDebt < 0);
+      if (d.apDebt) mk(`Debt ${d.apDebt > 0 ? '+' : ''}${d.apDebt}`, 'debt', d.apDebt < 0);
     });
     if (res.cardsDrawn) {
       items.push({
         id: floatId.current++,
         side: res.actorSide,
-        text: `抽 ${res.cardsDrawn} 张`,
+        text: `Draw ${res.cardsDrawn}`,
         kind: 'info',
         positive: true,
       });
+    }
+    if (res.crossCheckGranted) {
+      items.push({ id: floatId.current++, side: res.actorSide, text: 'Cross-check +1', kind: 'info', positive: true });
+    }
+    if (res.burdenOfProofGranted) {
+      items.push({ id: floatId.current++, side: res.actorSide, text: 'Burden of Proof', kind: 'info', positive: true });
     }
     if (!items.length) return;
     setFloats((f) => [...f, ...items]);
@@ -166,14 +188,15 @@ export function GameScreen({ author, onMenu }: Props) {
       await wait(750);
     }
     if (!aliveRef.current) return;
+
     const eff = CARDS[res.executedCardId].effect;
     const next: Record<Side, CharStatus> = { player: 'idle', reviewer: 'idle' };
-    if (eff.kind === 'damage' && res.damage) {
+    if ((eff.kind === 'damage' || eff.kind === 'damage_conditional') && res.damage) {
       next[res.actorSide] = 'attack';
       next[res.damage.target] = res.damage.hpLoss > 0 ? 'damage' : 'block';
       audio.play(res.damage.hpLoss > 0 ? 'hit' : 'block');
-      if (res.damage.absorbed > 0) showFloat(res.damage.target, `护盾抵挡 ${res.damage.absorbed}`, 'shield', true);
-      if (res.damage.pierce && res.damage.hpLoss > 0) showFloat(res.damage.target, '穿透！', 'info', false);
+      if (res.damage.absorbed > 0) showFloat(res.damage.target, `Shield absorbed ${res.damage.absorbed}`, 'shield', true);
+      if (res.damage.pierce && res.damage.hpLoss > 0) showFloat(res.damage.target, 'PIERCE!', 'info', false);
     } else if (eff.kind === 'shield') {
       next[res.actorSide] = 'defense';
       audio.play('shield');
@@ -183,6 +206,11 @@ export function GameScreen({ author, onMenu }: Props) {
       audio.play('accept');
     } else if (eff.kind === 'peek') {
       audio.play('peek');
+    } else if (eff.kind === 'cross_check' || eff.kind === 'burden_of_proof') {
+      audio.play('peek');
+    }
+    if (res.usedBurdenOfProof) {
+      showFloat(opponentOf(res.actorSide), 'Burden of Proof used', 'info', true);
     }
     setStatus(next);
     addFloats(res);
@@ -197,18 +225,38 @@ export function GameScreen({ author, onMenu }: Props) {
       setPeek({ cardId: res.peekedCardId ?? null });
     }
     if (res.actorSide === 'reviewer' && eff.kind === 'peek') {
-      setToast(res.peekedCardId === undefined || res.peekedCardId === null ? 'Reviewer 想偷看你的手牌，但你没有手牌。' : 'Reviewer #2 偷看了你的一张手牌……');
+      setToast(
+        res.peekedCardId === undefined || res.peekedCardId === null
+          ? `${reviewerProfile.name} tried to peek at your hand, but it was empty.`
+          : `${reviewerProfile.name} peeked at one of your cards...`,
+      );
       window.setTimeout(() => aliveRef.current && setToast(null), 2200);
     }
   };
 
-  const handleGameOverIfNeeded = async () => {
+  const finishBattleIfNeeded = async () => {
     const s = gameRef.current;
     if (s.phase !== 'game_over' || !s.result) return false;
-    await wait(500);
+    if (endedRef.current) return true;
+    endedRef.current = true;
+    await wait(700);
     audio.play(s.result.outcome === 'reject' ? 'lose' : 'win');
-    setShowGameOver(true);
+    onBattleEnd({
+      outcome: s.result.outcome,
+      playerHp: s.player.hp,
+      rounds: s.round,
+      stats: s.stats,
+    });
     return true;
+  };
+
+  const showCrossCheckNotice = (revealed: string | null, declared: CardId) => {
+    if (!revealed) {
+      setCrossCheckNotice(null);
+      return;
+    }
+    const mismatch = revealed !== CATEGORY_LABEL[CARDS[declared].category];
+    setCrossCheckNotice({ category: revealed, mismatch });
   };
 
   const playerDeclare = async (instanceId: string, declared: CardId) => {
@@ -233,13 +281,25 @@ export function GameScreen({ author, onMenu }: Props) {
     setSpeech({ player: CARDS[declared].flavor, reviewer: null });
     await wait(800);
     if (!aliveRef.current) return;
+
+    const csCategory = r.state.pendingPlay?.crossCheckRevealedCategory ?? null;
+    if (csCategory) {
+      showCrossCheckNotice(CATEGORY_LABEL[csCategory], declared);
+      await wait(1100);
+      setCrossCheckNotice(null);
+      if (!aliveRef.current) return;
+    }
+
     const view = buildChallengeView(gameRef.current);
     if (!view) {
       setBusy(false);
       return;
     }
     setStatus((s) => ({ ...s, reviewer: 'think' }));
-    setSpeech({ player: null, reviewer: THINK_LINES[Math.floor(Math.random() * THINK_LINES.length)] });
+    setSpeech({
+      player: null,
+      reviewer: reviewerProfile.thinkLines[Math.floor(Math.random() * reviewerProfile.thinkLines.length)],
+    });
     await wait(900);
     if (!aliveRef.current) return;
     const challenge = decideReviewerChallenge(view, ctx);
@@ -253,7 +313,7 @@ export function GameScreen({ author, onMenu }: Props) {
     commit(res.state);
     if (res.state.lastResolution) await animateResolution(res.state.lastResolution);
     if (!aliveRef.current) return;
-    await handleGameOverIfNeeded();
+    await finishBattleIfNeeded();
     setBusy(false);
   };
 
@@ -262,6 +322,14 @@ export function GameScreen({ author, onMenu }: Props) {
     const s = gameRef.current;
     if (s.phase !== 'awaiting_player_challenge') return;
     if (challenge && !canChallenge(s.player, ctx)) return;
+
+    if (s.pendingPlay?.crossCheckRevealedCategory) {
+      showCrossCheckNotice(CATEGORY_LABEL[s.pendingPlay.crossCheckRevealedCategory], s.pendingPlay.declaredCardId);
+      await wait(900);
+      setCrossCheckNotice(null);
+      if (!aliveRef.current) return;
+    }
+
     setBusy(true);
     audio.play('click');
     setSpeech({ player: challenge ? 'Objection!' : 'Fair enough.', reviewer: null });
@@ -274,7 +342,7 @@ export function GameScreen({ author, onMenu }: Props) {
     await wait(300);
     if (res.state.lastResolution) await animateResolution(res.state.lastResolution);
     if (!aliveRef.current) return;
-    await handleGameOverIfNeeded();
+    await finishBattleIfNeeded();
     setBusy(false);
   };
 
@@ -297,7 +365,7 @@ export function GameScreen({ author, onMenu }: Props) {
     setStatus((st) => ({ ...st, reviewer: 'think' }));
     await wait(850);
     if (!aliveRef.current) return;
-    const action = decideReviewerAction(buildReviewerView(gameRef.current), ctx);
+    const action = decideReviewerAction(buildReviewerView(gameRef.current, ctx), ctx);
     setStatus((st) => ({ ...st, reviewer: 'idle' }));
     if (action.type === 'end') {
       const r = endTurn(gameRef.current, 'reviewer', ctx);
@@ -306,7 +374,7 @@ export function GameScreen({ author, onMenu }: Props) {
         setSpeech({ player: null, reviewer: 'I am done. For now.' });
         await wait(700);
         setSpeech({ player: null, reviewer: null });
-        if (await handleGameOverIfNeeded()) {
+        if (await finishBattleIfNeeded()) {
           setBusy(false);
           return;
         }
@@ -325,7 +393,7 @@ export function GameScreen({ author, onMenu }: Props) {
     commit(r.state);
     audio.play('play');
     showFloat('reviewer', `-${r.state.pendingPlay!.declaredCost} AP`, 'ap', false);
-    const lines = REVIEWER_LINES[action.declaredCardId];
+    const lines = reviewerProfile.lines[action.declaredCardId] ?? ['...'];
     setSpeech({ player: null, reviewer: lines[Math.floor(Math.random() * lines.length)] });
     setStage({
       key: stageKey.current++,
@@ -338,25 +406,11 @@ export function GameScreen({ author, onMenu }: Props) {
     });
     await wait(500);
     setBusy(false);
-  }, [commit, ctx, showTurnBanner]);
+  }, [commit, ctx, showTurnBanner, reviewerProfile]);
 
   useEffect(() => {
     if (game.phase === 'reviewer_turn' && !busy) void runReviewerStep();
   }, [game, busy, runReviewerStep]);
-
-  const restart = () => {
-    if (busyRef.current) return;
-    audio.play('click');
-    const s = createGame(ctx);
-    commit(s);
-    setStage(null);
-    setBanner(null);
-    setPeek(null);
-    setShowGameOver(false);
-    setStatus({ player: 'idle', reviewer: 'idle' });
-    setSpeech({ player: null, reviewer: null });
-    void showTurnBanner('player');
-  };
 
   const cycleSpeed = () => {
     const next = speed === 1 ? 2 : speed === 2 ? 4 : 1;
@@ -370,16 +424,23 @@ export function GameScreen({ author, onMenu }: Props) {
   const canPlay = canPlayAnything(p, ctx);
   const awaitingPlayer = game.phase === 'awaiting_player_challenge' && !busy;
   const playerCanChallenge = canChallenge(p, ctx);
+  const playerFreeChallenge = p.burdenOfProofActive && p.ap < 1;
   const over = game.phase === 'game_over';
+  const pendingDeclared = game.pendingPlay ? CARDS[game.pendingPlay.declaredCardId] : null;
+  const pendingCsCategory = game.pendingPlay?.crossCheckRevealedCategory ?? null;
+  const pendingCsMismatch =
+    pendingCsCategory && pendingDeclared ? CATEGORY_LABEL[pendingCsCategory] !== pendingDeclared.category : false;
 
   return (
     <div className="game-screen">
-      <StatusBar game={game} authorImg={authorImg} reviewerImg={ASSETS.reviewer} />
+      <StatusBar game={game} authorImg={authorImg} reviewerImg={reviewerImg} />
 
       <div className="stage stage-bg">
         <div className="stage-screen">
           <div className="screen-title">REBUTTAL SESSION</div>
-          <div className="screen-sub">Paper #4242 · "Attention Is Almost All You Need"</div>
+          <div className="screen-sub">
+            Paper #4242 · {reviewerProfile.id === 'reviewer1' ? 'First Review' : 'Final Rebuttal'}
+          </div>
         </div>
 
         <Character
@@ -387,7 +448,7 @@ export function GameScreen({ author, onMenu }: Props) {
           img={authorImg}
           name="Author"
           status={status.player}
-          shield={totalShield(game.player)}
+          shield={totalTemporaryShield(game.player) + totalPermanentShield(game.player)}
           floats={floats.filter((f) => f.side === 'player')}
           speech={speech.player}
           active={game.activeSide === 'player'}
@@ -395,10 +456,10 @@ export function GameScreen({ author, onMenu }: Props) {
         />
         <Character
           side="reviewer"
-          img={ASSETS.reviewer}
-          name="Reviewer #2"
+          img={reviewerImg}
+          name={reviewerProfile.name}
           status={status.reviewer}
-          shield={totalShield(game.reviewer)}
+          shield={totalTemporaryShield(game.reviewer) + totalPermanentShield(game.reviewer)}
           floats={floats.filter((f) => f.side === 'reviewer')}
           speech={speech.reviewer}
           active={game.activeSide === 'reviewer'}
@@ -409,7 +470,7 @@ export function GameScreen({ author, onMenu }: Props) {
           {stage && (
             <div className={`stage-card from-${stage.actorSide}`} key={stage.key}>
               <div className="declare-label">
-                {stage.actorSide === 'player' ? 'You declare' : 'Reviewer declares'}:{' '}
+                {stage.actorSide === 'player' ? 'You declare' : `${reviewerProfile.name} declares`}:{' '}
                 <b className={`cat-text-${CARDS[stage.declaredCardId].category}`}>{CARDS[stage.declaredCardId].name}!</b>
               </div>
               <div className={`flip-card ${stage.flipped ? 'flipped' : ''}`}>
@@ -430,36 +491,55 @@ export function GameScreen({ author, onMenu }: Props) {
               </div>
               {stage.ownActualCardId && !stage.flipped && (
                 <div className="own-actual">
-                  你的真实卡牌：{CARDS[stage.ownActualCardId].name}
-                  {stage.ownActualCardId !== stage.declaredCardId ? '（虚张声势中……）' : ''}
+                  Your actual card: {CARDS[stage.ownActualCardId].name}
+                  {stage.ownActualCardId !== stage.declaredCardId ? ' (bluffing...)' : ''}
                 </div>
               )}
-              <div className="declared-effect">宣称效果：{CARDS[stage.declaredCardId].description}</div>
+              <div className="declared-effect">Declared effect: {CARDS[stage.declaredCardId].description}</div>
             </div>
           )}
 
-          {awaitingPlayer && game.pendingPlay && (
+          {crossCheckNotice && (
+            <div className={`crosscheck-notice ${crossCheckNotice.mismatch ? 'mismatch' : 'match'}`}>
+              <div className="cs-title">CROSS-CHECK</div>
+              <div className="cs-body">
+                Actual card category: <b>{crossCheckNotice.category}</b>
+              </div>
+              {crossCheckNotice.mismatch && <div className="cs-warn">⚠ Category mismatch detected!</div>}
+            </div>
+          )}
+
+          {awaitingPlayer && game.pendingPlay && pendingDeclared && (
             <div className="respond-panel">
               <div className="respond-title">
-                Reviewer declares: <b>{CARDS[game.pendingPlay.declaredCardId].name}</b>
+                {reviewerProfile.name} declares: <b>{pendingDeclared.name}</b>
               </div>
+              {pendingCsCategory && (
+                <div className={`respond-crosscheck ${pendingCsMismatch ? 'mismatch' : ''}`}>
+                  CROSS-CHECK reveals: <b>{CATEGORY_LABEL[pendingCsCategory]}</b>
+                  {pendingCsMismatch ? ' — declared category differs!' : ''}
+                </div>
+              )}
               <div className="respond-hint">
-                质疑成功：你 +1 AP，Reviewer 受罚并执行真实牌。质疑失败：你 -1 AP。
+                Challenge success: +1 AP, reviewer penalized, actual card resolves. Challenge fail: -1 AP.
+                {playerFreeChallenge && (
+                  <span className="burden-hint"> Burden of Proof: free challenge, success grants +2 AP.</span>
+                )}
               </div>
               <div className="respond-actions">
                 <button className="btn accept-btn" onClick={() => void playerRespond(false)}>
                   Accept
                 </button>
                 <button
-                  className="btn challenge-btn"
+                  className={`btn challenge-btn ${playerFreeChallenge ? 'free' : ''}`}
                   disabled={!playerCanChallenge}
                   onClick={() => void playerRespond(true)}
-                  title={playerCanChallenge ? '' : '需要至少 1 AP 才能质疑'}
+                  title={playerCanChallenge ? '' : 'Need at least 1 AP to challenge'}
                 >
-                  Challenge
+                  {playerFreeChallenge ? 'Special Challenge' : 'Challenge'}
                 </button>
               </div>
-              {!playerCanChallenge && <div className="respond-warn">你的 AP 为 0，无法质疑</div>}
+              {!playerCanChallenge && <div className="respond-warn">You have 0 AP and no Burden of Proof</div>}
             </div>
           )}
 
@@ -477,17 +557,17 @@ export function GameScreen({ author, onMenu }: Props) {
       <div className="hand-area">
         <div className="hand-controls">
           <button className="btn small ghost" onClick={() => setLogOpen((o) => !o)}>
-            {logOpen ? '隐藏记录' : 'Action Log'}
+            {logOpen ? 'Hide Log' : 'Action Log'}
           </button>
-          <button className="btn small ghost" onClick={cycleSpeed} title="加快动画">
-            速度 x{speed}
+          <button className="btn small ghost" onClick={cycleSpeed} title="Speed up animations">
+            Speed x{speed}
           </button>
           <button className="btn small ghost" onClick={onMenu}>
-            菜单
+            Menu
           </button>
         </div>
         <div className="hand">
-          {p.hand.length === 0 && <div className="hand-empty">没有手牌</div>}
+          {p.hand.length === 0 && <div className="hand-empty">No cards in hand</div>}
           {p.hand.map((card, i) => {
             const cost = getCost(p, card.cardId, ctx);
             const disabled = !isPlayerTurn || !canPlay;
@@ -510,16 +590,16 @@ export function GameScreen({ author, onMenu }: Props) {
         <div className="end-turn-wrap">
           <div className="turn-hint">
             {over
-              ? '游戏结束'
+              ? 'Battle over'
               : game.phase === 'player_turn'
                 ? canPlay
-                  ? '选择一张牌出牌，或结束回合'
-                  : 'AP 不足，无法继续出牌'
+                  ? 'Pick a card to play, or end your turn'
+                  : 'Not enough AP to play anything'
                 : game.phase === 'awaiting_player_challenge'
-                  ? '请回应 Reviewer 的宣称'
+                  ? 'Respond to the reviewer declaration'
                   : game.phase === 'awaiting_reviewer_challenge' || busy
-                    ? '结算中……'
-                    : 'Reviewer #2 正在行动……'}
+                    ? 'Resolving...'
+                    : `${reviewerProfile.name} is acting...`}
           </div>
           <button
             className={`btn end-turn ${isPlayerTurn && !canPlay ? 'pulse' : ''}`}
@@ -539,6 +619,7 @@ export function GameScreen({ author, onMenu }: Props) {
           player={p}
           suspicion={game.suspicion}
           reviewerAp={game.reviewer.ap}
+          reviewerHasBurdenOfProof={game.reviewer.burdenOfProofActive}
           onCancel={() => setSelected(null)}
           onConfirm={(d) => void playerDeclare(selected.instanceId, d)}
         />
@@ -547,25 +628,23 @@ export function GameScreen({ author, onMenu }: Props) {
       {peek && (
         <div className="modal-backdrop" onClick={() => setPeek(null)}>
           <div className="modal peek-modal" onClick={(e) => e.stopPropagation()}>
-            <h2>Investigation 结果</h2>
+            <h2>Investigation Result</h2>
             {peek.cardId ? (
               <>
-                <p>你偷看到 Reviewer #2 手中有一张：</p>
+                <p>You peeked at one of {reviewerProfile.name}'s cards:</p>
                 <CardFace cardId={peek.cardId} />
               </>
             ) : (
-              <p>Reviewer #2 没有手牌，调查一无所获。</p>
+              <p>{reviewerProfile.name} has no cards in hand. Investigation found nothing.</p>
             )}
             <div className="modal-actions">
               <button className="btn primary" onClick={() => setPeek(null)}>
-                知道了
+                Got it
               </button>
             </div>
           </div>
         </div>
       )}
-
-      {showGameOver && game.result && <GameOver game={game} onPlayAgain={restart} onMenu={onMenu} />}
     </div>
   );
 }

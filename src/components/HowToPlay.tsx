@@ -1,5 +1,5 @@
-import { CARD_IDS } from '../game/cards';
-import { DEFAULT_CONFIG } from '../game/config';
+import { CARD_IDS, ADVANCED_CARD_IDS } from '../game/cards';
+import { DEFAULT_CONFIG, REVIEWER1_CONFIG } from '../game/config';
 import { CardFace } from './Card';
 
 export function HowToPlay({ onBack, onStart }: { onBack: () => void; onStart: () => void }) {
@@ -8,46 +8,92 @@ export function HowToPlay({ onBack, onStart }: { onBack: () => void; onStart: ()
     <div className="howto stage-bg">
       <div className="howto-panel">
         <h1>How to Play</h1>
+
+        <h2 className="howto-section">Conference Run</h2>
         <ol className="howto-steps">
           <li>
-            <b>选择真实卡牌。</b> 在你的回合点击一张手牌。
+            <b>Submit your paper.</b> Pick a Paper Type. It decides the advanced card you start with and the claim it
+            unlocks right away.
           </li>
           <li>
-            <b>宣称任意卡牌。</b> 你可以把它说成 7 种卡牌中的任意一种——诚实或者虚张声势都可以。出牌费用按
-            <b>宣称的类型</b>计算。
+            <b>Follow the review route.</b> Reviewer #1 ({REVIEWER1_CONFIG.reviewerHp} HP) → card reward → two random
+            research events → Reviewer #2 ({c.reviewerHp} HP) → final decision. Losing any battle ends the run.
           </li>
           <li>
-            <b>接受或质疑。</b> 对方可以 Accept（按宣称效果执行）或 Challenge（翻开真实卡牌）。
+            <b>Grow your deck.</b> After beating Reviewer #1 you heal 2 HP and choose one of three advanced cards, or
+            skip it. Events can also hand you cards or buff your next battle.
+          </li>
+        </ol>
+
+        <h2 className="howto-section">Declare, Bluff, Challenge</h2>
+        <ol className="howto-steps">
+          <li>
+            <b>Choose a real card.</b> Click a card in your hand. That is the card you will actually execute.
+          </li>
+          <li>
+            <b>Declare any unlocked claim.</b> You may call it whatever you like — honest or a bluff. You pay the cost
+            of the <b>declared</b> card, so the price never leaks what you really hold.
+          </li>
+          <li>
+            <b>They accept or challenge.</b>
             <ul>
-              <li>识破谎言：质疑者 +1 AP，撒谎者补交费用差额并额外 -1 AP，执行真实卡牌效果。</li>
-              <li>冤枉好人：质疑者 -1 AP，执行宣称效果。</li>
-              <li>质疑需要至少 1 AP。AP 不足时扣成「欠额」，之后恢复的 AP 先还债。</li>
+              <li>Accepted: only the declared effect resolves, and only the declared card's cost goes up.</li>
+              <li>Bluff caught: you pay the difference up to the real card's cost plus a 1 AP lie penalty, both cards'
+                costs go up, and the real card resolves.</li>
+              <li>False accusation: the challenger loses 1 AP and the declared effect resolves.</li>
             </ul>
           </li>
           <li>
-            <b>管理 AP。</b> 每回合恢复 {c.apRecoveryPerTurn} AP（上限 {c.maxAp}），抽 {c.drawPerTurn} 张牌（手牌上限 {c.handLimit}）。
-            同一类型（Attack / Defense / Utility）每回合第 n 次使用花费 n AP。记得为质疑对手留点 AP！
-          </li>
-          <li>
-            <b>在 Rebuttal Deadline 前击败 Reviewer #2。</b> 双方 {c.initialHp} HP，先归零者输。{c.maxRounds} 轮后按 HP 判定：
-            多于对手 Accept，相同 Weak Accept，少于对手 Reject。
+            <b>Watch your AP.</b> You get {c.apRecoveryPerTurn} AP per turn (max {c.maxAp}) and draw {c.drawPerTurn}{' '}
+            cards (hand limit {c.handLimit}). Challenging costs 1 AP. If you overspend you go into AP debt and your next
+            recovery pays it back first.
           </li>
         </ol>
+
+        <h2 className="howto-section">Per-Card Cost Escalation</h2>
         <p className="howto-note">
-          护盾只抵挡普通伤害，在拥有者下个回合开始时清零；Critical Point 的穿透伤害无视护盾。Reviewer
-          的「警惕值」越高越爱质疑：识破你一次 +2，冤枉你一次 -1。
+          Each card costs 1 AP plus the number of times <b>that same card</b> was declared for this turn. Playing
+          Revision does not make Argument more expensive anymore. All counters reset at the start of your own turn.
         </p>
+
+        <h2 className="howto-section">Shields, Suspicion and Unlocks</h2>
+        <p className="howto-note">
+          Temporary shields (blue) absorb normal damage and expire at your turn start; permanent shields (gold, Prior
+          Work) survive between turns but not between battles. Critical Point deals piercing damage that ignores both.
+          The reviewer's suspicion drives its challenge chance — catching your bluff raises it, a false accusation lowers
+          it. You can only declare a claim that is in your Claim Pool; advanced claims unlock when you acquire that card.
+        </p>
+
+        <h2 className="howto-section">Advanced Cards</h2>
+        <p className="howto-note">
+          Counterargument punishes a reviewer that already failed a challenge this turn. Red Herring hits harder when
+          your bluff on it gets caught. Prior Work grants permanent shield. Cross-check reveals the category of the
+          opponent's next real card before you decide to challenge. Burden of Proof lets you challenge once at 0 AP — a
+          miss is free, a hit pays 2 AP.
+        </p>
+
+        <h2 className="howto-section">Deadline</h2>
+        <p className="howto-note">
+          If nobody reaches 0 HP after {c.maxRounds} rounds, higher HP wins: Accept, Weak Accept on a tie, Reject if you
+          are behind. Reviewer #2 decides the final outcome of your paper.
+        </p>
+
+        <h2 className="howto-section">Cards</h2>
         <div className="howto-cards">
           {CARD_IDS.map((id) => (
             <CardFace key={id} cardId={id} small />
           ))}
         </div>
+        <div className="howto-badge-row">
+          {ADVANCED_CARD_IDS.length} advanced cards unlock through rewards and events.
+        </div>
+
         <div className="modal-actions">
           <button className="btn ghost" onClick={onBack}>
-            返回
+            Back
           </button>
           <button className="btn primary" onClick={onStart}>
-            Start Game
+            Start Run
           </button>
         </div>
       </div>

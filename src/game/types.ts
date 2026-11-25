@@ -9,14 +9,22 @@ export type CardId =
   | 'strong_evidence'
   | 'additional_experiment'
   | 'revision'
-  | 'investigation';
+  | 'investigation'
+  | 'counterargument'
+  | 'red_herring'
+  | 'prior_work'
+  | 'cross_check'
+  | 'burden_of_proof';
 
 export type CardEffect =
   | { kind: 'damage'; amount: number; pierce: boolean }
-  | { kind: 'shield'; amount: number }
+  | { kind: 'damage_conditional'; baseAmount: number; bonusAmount: number; condition: 'opponent_failed_challenge_this_turn' | 'self_bluff_caught' }
+  | { kind: 'shield'; amount: number; permanent: boolean }
   | { kind: 'draw'; amount: number }
   | { kind: 'gain_ap'; amount: number }
-  | { kind: 'peek'; amount: number };
+  | { kind: 'peek'; amount: number }
+  | { kind: 'cross_check' }
+  | { kind: 'burden_of_proof' };
 
 export interface CardDefinition {
   id: CardId;
@@ -27,6 +35,7 @@ export interface CardDefinition {
   effect: CardEffect;
   artwork: string;
   baseCost: number;
+  isAdvanced: boolean;
 }
 
 export interface CardInstance {
@@ -34,17 +43,16 @@ export interface CardInstance {
   cardId: CardId;
 }
 
-export type ShieldKind = 'temporary';
+export type ShieldKind = 'temporary' | 'permanent';
 
 export interface Shield {
   id: string;
   amount: number;
   kind: ShieldKind;
   expires: 'owner_turn_start' | 'never';
-  trigger?: string;
 }
 
-export type TypeUsage = Record<Category, number>;
+export type CardUsage = Partial<Record<CardId, number>>;
 
 export interface CharacterState {
   side: Side;
@@ -57,8 +65,12 @@ export interface CharacterState {
   hand: CardInstance[];
   deck: CardInstance[];
   discard: CardInstance[];
-  typeUsage: TypeUsage;
+  cardUsage: CardUsage;
   turnsTaken: number;
+  crossCheckCharges: number;
+  burdenOfProofActive: boolean;
+  failedChallengesThisTurn: number;
+  claimPool: CardId[];
 }
 
 export type Phase =
@@ -79,8 +91,9 @@ export interface PendingPlay {
   actualCardId: CardId;
   declaredCardId: CardId;
   declaredCost: number;
-  actualTypeCostSnapshot: number;
+  actualCostSnapshot: number;
   challengeStatus: ChallengeStatus;
+  crossCheckRevealedCategory: Category | null;
 }
 
 export interface PublicPlayInfo {
@@ -88,6 +101,7 @@ export interface PublicPlayInfo {
   actorSide: Side;
   declaredCardId: CardId;
   declaredCost: number;
+  crossCheckRevealedCategory: Category | null;
 }
 
 export interface SideDelta {
@@ -106,12 +120,16 @@ export interface Resolution {
   revealedCardId: CardId | null;
   executedCardId: CardId;
   extraCost: number;
+  usedBurdenOfProof: boolean;
   damage?: { target: Side; absorbed: number; hpLoss: number; pierce: boolean };
   shieldGained?: number;
+  permanentShieldGained?: number;
   cardsDrawn?: number;
   apGained?: number;
   apDebtRepaid?: number;
   peekedCardId?: CardId | null;
+  crossCheckGranted?: boolean;
+  burdenOfProofGranted?: boolean;
   deltas: Record<Side, SideDelta>;
 }
 
@@ -150,6 +168,7 @@ export interface GameStats {
 
 export interface ReviewerMemory {
   observedPlayerCards: { instanceId: string; cardId: CardId; round: number }[];
+  crossCheckRevealedThisPlay: Category | null;
 }
 
 export interface GameState {
@@ -166,4 +185,5 @@ export interface GameState {
   stats: GameStats;
   reviewerMemory: ReviewerMemory;
   nextId: number;
+  reviewerName: string;
 }
