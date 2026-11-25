@@ -2,6 +2,8 @@ import { DEFAULT_CONFIG, type GameConfig } from './config';
 import { REVIEWER2_PROFILE, type ReviewerConfig } from './reviewers';
 import { buildCardDefinitions, buildDeck, CARD_IDS, BASIC_CLAIM_POOL, PLAYER_BASE_DECK } from './cards';
 import { defaultRng, pickRandom, shuffle, type Rng } from './rng';
+import { logText } from '../i18n/log';
+import { cardName, reviewerLabel } from '../i18n/content';
 import type {
   CardDefinition,
   CardId,
@@ -179,24 +181,28 @@ function pushHistory(state: GameState, entry: Omit<HistoryEntry, 'id' | 'round'>
   state.history.push({ ...entry, id: state.nextId++, round: state.round });
 }
 
+function sideLabel(state: GameState, side: Side): string {
+  return side === 'player' ? logText().author : reviewerLabel(state.reviewerName);
+}
+
 function startTurn(state: GameState, side: Side, ctx: EngineContext): void {
   const c = state[side];
   state.activeSide = side;
   state.phase = side === 'player' ? 'player_turn' : 'reviewer_turn';
   c.failedChallengesThisTurn = 0;
 
-  const actorLabel = side === 'player' ? 'Author' : state.reviewerName;
-  let text = `—— Round ${state.round}: ${actorLabel}'s turn ——`;
+  const L = logText();
+  let text = L.turnStart(state.round, sideLabel(state, side));
 
   if (c.turnsTaken > 0) {
     c.shields = c.shields.filter((sh) => sh.expires !== 'owner_turn_start');
     c.cardUsage = {};
     const { repaid, gained } = gainAp(c, ctx.config.apRecoveryPerTurn);
     const drawn = drawCards(c, ctx.config.drawPerTurn, ctx);
-    const parts = [`+${gained} AP`];
-    if (repaid > 0) parts.push(`debt repaid ${repaid}`);
-    parts.push(`drew ${drawn}`);
-    text += ` (${parts.join(', ')})`;
+    const parts = [L.turnGainAp(gained)];
+    if (repaid > 0) parts.push(L.turnDebtRepaid(repaid));
+    parts.push(L.turnDrew(drawn));
+    text += ` (${parts.join(L.listSep)})`;
   }
   c.turnsTaken++;
   pushHistory(state, { kind: 'turn', actorSide: side, text });
@@ -290,7 +296,7 @@ export function createGame(ctx: EngineContext = makeContext(), options: CreateGa
 
   drawCards(player, playerInitHand, ctx);
   drawCards(reviewer, revCfg.initialHandSize, revCtx);
-  pushHistory(state, { kind: 'system', text: `Paper submitted. ${reviewerProfile.name} is ready. Rebuttal begins!` });
+  pushHistory(state, { kind: 'system', text: logText().gameStart(reviewerLabel(reviewerProfile.name)) });
   startTurn(state, 'player', ctx);
   return state;
 }
@@ -390,12 +396,13 @@ function checkHpResult(s: GameState): GameResult | null {
 }
 
 function describeDelta(name: string, d: SideDelta): string {
+  const L = logText();
   const parts: string[] = [];
-  if (d.hp) parts.push(`HP ${d.hp > 0 ? '+' : ''}${d.hp}`);
-  if (d.ap) parts.push(`AP ${d.ap > 0 ? '+' : ''}${d.ap}`);
-  if (d.apDebt) parts.push(`debt ${d.apDebt > 0 ? '+' : ''}${d.apDebt}`);
-  if (d.shield) parts.push(`shield ${d.shield > 0 ? '+' : ''}${d.shield}`);
-  return parts.length ? `${name}: ${parts.join(', ')}` : '';
+  if (d.hp) parts.push(L.deltaHp(d.hp));
+  if (d.ap) parts.push(L.deltaAp(d.ap));
+  if (d.apDebt) parts.push(L.deltaDebt(d.apDebt));
+  if (d.shield) parts.push(L.deltaShield(d.shield));
+  return parts.length ? L.deltaLine(name, parts) : '';
 }
 
 export function respondToPlay(
@@ -482,7 +489,9 @@ export function respondToPlay(
 
   const effect = ctx.cards[executed].effect;
   const target = s[opponentOf(pending.actorSide)];
-  const actorLabel = pending.actorSide === 'player' ? 'Author' : s.reviewerName;
+  const L = logText();
+  const actorLabel = sideLabel(s, pending.actorSide);
+  const targetLabel = sideLabel(s, target.side);
   const effectParts: string[] = [];
 
   switch (effect.kind) {
@@ -491,8 +500,8 @@ export function respondToPlay(
       resolution.damage = { target: target.side, ...r, pierce: effect.pierce };
       effectParts.push(
         r.absorbed > 0
-          ? `Shield absorbed ${r.absorbed}, ${target.side === 'player' ? 'Author' : s.reviewerName} lost ${r.hpLoss} HP`
-          : `${target.side === 'player' ? 'Author' : s.reviewerName} lost ${r.hpLoss} HP${effect.pierce ? ' (pierce)' : ''}`,
+          ? L.shieldAbsorbed(r.absorbed, targetLabel, r.hpLoss)
+          : L.lostHp(targetLabel, r.hpLoss, effect.pierce, false),
       );
       break;
     }
@@ -512,9 +521,7 @@ export function respondToPlay(
       }
       const r = applyDamage(target, dmgAmount, false);
       resolution.damage = { target: target.side, ...r, pierce: false };
-      effectParts.push(
-        `${target.side === 'player' ? 'Author' : s.reviewerName} lost ${r.hpLoss} HP${triggeredBonus ? ' (+bonus!)' : ''}`,
-      );
+      effectParts.push(L.lostHp(targetLabel, r.hpLoss, false, triggeredBonus));
       break;
     }
     case 'shield': {
@@ -523,22 +530,20 @@ export function respondToPlay(
       actor.shields.push({ id: `sh-${s.nextId++}`, amount: effect.amount, kind, expires });
       if (effect.permanent) resolution.permanentShieldGained = effect.amount;
       else resolution.shieldGained = effect.amount;
-      effectParts.push(`${actorLabel} gained ${effect.amount} ${kind} shield`);
+      effectParts.push(L.gainedShield(actorLabel, effect.amount, effect.permanent));
       break;
     }
     case 'draw': {
       const n = drawCards(actor, effect.amount, ctx);
       resolution.cardsDrawn = n;
-      effectParts.push(`${actorLabel} drew ${n} card(s)`);
+      effectParts.push(L.drewCards(actorLabel, n));
       break;
     }
     case 'gain_ap': {
       const r = gainAp(actor, effect.amount);
       resolution.apGained = r.gained;
       resolution.apDebtRepaid = r.repaid;
-      effectParts.push(
-        `${actorLabel} recovered ${r.gained} AP${r.repaid ? ` (debt repaid ${r.repaid})` : ''}`,
-      );
+      effectParts.push(L.recoveredAp(actorLabel, r.gained, r.repaid));
       break;
     }
     case 'peek': {
@@ -551,22 +556,22 @@ export function respondToPlay(
           round: s.round,
         });
       }
-      effectParts.push(peeked ? `${actorLabel} peeked at a card` : 'No cards to peek at');
+      effectParts.push(peeked ? L.peeked(actorLabel) : L.nothingToPeek);
       break;
     }
     case 'cross_check': {
       actor.crossCheckCharges++;
       resolution.crossCheckGranted = true;
-      effectParts.push(`${actorLabel} gained 1 Cross-check charge`);
+      effectParts.push(L.gainedCrossCheck(actorLabel));
       break;
     }
     case 'burden_of_proof': {
       if (!actor.burdenOfProofActive) {
         actor.burdenOfProofActive = true;
         resolution.burdenOfProofGranted = true;
-        effectParts.push(`${actorLabel} gained Burden of Proof`);
+        effectParts.push(L.gainedBurden(actorLabel));
       } else {
-        effectParts.push('Burden of Proof already active');
+        effectParts.push(L.burdenAlready);
       }
       break;
     }
@@ -580,17 +585,16 @@ export function respondToPlay(
   const result = checkHpResult(s);
   actor.discard.push({ instanceId: pending.actualCardInstanceId, cardId: pending.actualCardId });
 
-  const declaredName = ctx.cards[pending.declaredCardId].name;
-  const actorName = pending.actorSide === 'player' ? 'Author' : s.reviewerName;
-  const respName = pending.actorSide === 'player' ? s.reviewerName : 'Author';
-  let head = `${actorName} declares ${declaredName}`;
-  if (!challenge) head += ` → ${respName} accepts`;
+  const declaredName = cardName(pending.declaredCardId);
+  const respName = sideLabel(s, responderSide);
+  let head = L.declares(actorLabel, declaredName);
+  if (!challenge) head += L.accepts(respName);
   else if (pending.challengeStatus === 'challenge_success')
-    head += ` → ${respName} challenges! Bluff caught! (actual: ${ctx.cards[pending.actualCardId].name}, extra: ${extraCost} AP)`;
-  else head += ` → ${respName} challenges! False accusation! (really was ${declaredName})`;
+    head += L.bluffCaught(respName, cardName(pending.actualCardId), extraCost);
+  else head += L.falseAccusation(respName, declaredName);
 
   const deltaText = (['player', 'reviewer'] as Side[])
-    .map((sd) => describeDelta(sd === 'player' ? 'Author' : s.reviewerName, resolution.deltas[sd]))
+    .map((sd) => describeDelta(sideLabel(s, sd), resolution.deltas[sd]))
     .filter(Boolean)
     .join('; ');
 
@@ -603,7 +607,7 @@ export function respondToPlay(
     revealedCardId: resolution.revealedCardId,
     executedCardId: executed,
     deltas: resolution.deltas,
-    text: `${head}. Effect: ${effectParts.join('; ')}${deltaText ? `. [${deltaText}]` : ''}`,
+    text: L.playLine(head, effectParts, deltaText),
   });
 
   s.lastResolution = resolution;
@@ -619,8 +623,8 @@ export function respondToPlay(
 function finishGame(s: GameState, result: GameResult): void {
   s.result = result;
   s.phase = 'game_over';
-  const label = result.outcome === 'accept' ? 'Accept' : result.outcome === 'weak_accept' ? 'Weak Accept' : 'Reject';
-  pushHistory(s, { kind: 'system', text: `Battle over: ${label}` });
+  const L = logText();
+  pushHistory(s, { kind: 'system', text: L.battleOver(L.outcome[result.outcome]) });
 }
 
 export function deadlineOutcome(playerHp: number, reviewerHp: number): GameResult {
@@ -637,8 +641,7 @@ export function endTurn(state: GameState, side: Side, ctx: EngineContext = makeC
 
   const s = clone(state);
   s.lastResolution = null;
-  const actorName = side === 'player' ? 'Author' : s.reviewerName;
-  pushHistory(s, { kind: 'system', actorSide: side, text: `${actorName} ends their turn` });
+  pushHistory(s, { kind: 'system', actorSide: side, text: logText().endsTurn(sideLabel(s, side)) });
 
   const opSide = opponentOf(side);
   const opponent = s[opSide];
@@ -649,7 +652,7 @@ export function endTurn(state: GameState, side: Side, ctx: EngineContext = makeC
   if (side === 'player') {
     startTurn(s, 'reviewer', ctx);
   } else if (s.round >= ctx.config.maxRounds) {
-    pushHistory(s, { kind: 'system', text: 'Rebuttal Deadline! Comparing HP...' });
+    pushHistory(s, { kind: 'system', text: logText().deadline });
     finishGame(s, deadlineOutcome(s.player.hp, s.reviewer.hp));
   } else {
     s.round++;

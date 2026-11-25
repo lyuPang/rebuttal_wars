@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { CARDS, CATEGORY_LABEL } from '../game/cards';
+import { CARDS } from '../game/cards';
+import { cardText, categoryLabel, useLang, useT } from '../i18n';
 import { DEFAULT_CONFIG } from '../game/config';
 import { challengeProbability, getCost, makeContext } from '../game/engine';
 import type { CardId, CardInstance, CharacterState } from '../game/types';
@@ -20,6 +21,8 @@ interface Props {
 }
 
 export function DeclareModal({ card, player, suspicion, reviewerAp, reviewerHasBurdenOfProof, onConfirm, onCancel }: Props) {
+  const t = useT();
+  const lang = useLang();
   const claimPool = player.claimPool;
   const defaultDeclared =
     player.ap >= getCost(player, card.cardId, ctx) && claimPool.includes(card.cardId)
@@ -35,6 +38,8 @@ export function DeclareModal({ card, player, suspicion, reviewerAp, reviewerHasB
   const canChallenge = reviewerAp >= 1 || reviewerHasBurdenOfProof;
   const prob = canChallenge ? Math.round(challengeProbability(suspicion) * 100) : 0;
 
+  const summary = isBluff ? t.bluffSummary(cost, prob, penalty) : t.honestSummary(cost, prob);
+
   const byCategory: Record<string, CardId[]> = { attack: [], defense: [], utility: [] };
   for (const id of claimPool) {
     const def = CARDS[id];
@@ -44,10 +49,10 @@ export function DeclareModal({ card, player, suspicion, reviewerAp, reviewerHasB
   return (
     <div className="modal-backdrop" onClick={onCancel}>
       <div className="modal declare-modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Declare this card as...</h2>
+        <h2>{t.declareTitle}</h2>
         <div className="declare-body">
           <div className="declare-actual">
-            <div className="declare-sub">Your actual card</div>
+            <div className="declare-sub">{t.yourActualCard.replace(/[:：]$/, '')}</div>
             <CardFace cardId={card.cardId} />
           </div>
           <div className="declare-options">
@@ -56,7 +61,7 @@ export function DeclareModal({ card, player, suspicion, reviewerAp, reviewerHasB
               if (ids.length === 0) return null;
               return (
                 <div key={cat} className="declare-category-group">
-                  <div className="declare-cat-label">{CATEGORY_LABEL[cat]}</div>
+                  <div className="declare-cat-label">{categoryLabel(cat, lang)}</div>
                   {ids.map((id) => {
                     const def = CARDS[id];
                     const c = getCost(player, id, ctx);
@@ -74,13 +79,11 @@ export function DeclareModal({ card, player, suspicion, reviewerAp, reviewerHasB
                         <CardIcon id={id} size={28} />
                         <div className="opt-text">
                           <div className="opt-name">
-                            {def.name}
-                            {id === card.cardId && <span className="honest-tag">Honest</span>}
-                            {def.isAdvanced && <span className="advanced-tag">Advanced</span>}
+                            {cardText(id, lang).name}
+                            {id === card.cardId && <span className="honest-tag">{t.honest}</span>}
+                            {def.isAdvanced && <span className="advanced-tag">{t.advanced}</span>}
                           </div>
-                          <div className="opt-desc">
-                            {def.description}
-                          </div>
+                          <div className="opt-desc">{cardText(id, lang).description}</div>
                         </div>
                         <div className={`opt-cost ${disabled ? 'no' : ''}`}>{c} AP</div>
                       </button>
@@ -92,28 +95,16 @@ export function DeclareModal({ card, player, suspicion, reviewerAp, reviewerHasB
           </div>
         </div>
         <div className={`declare-summary ${isBluff ? 'bluff' : 'honest'}`}>
-          {isBluff ? (
-            <>
-              <b>Bluffing!</b> Cost: {cost} AP. Reviewer challenge probability: <b>{prob}%</b>.
-              {' '}If caught: extra <b>{penalty} AP</b> penalty, actual card effect resolves.
-            </>
-          ) : (
-            <>
-              <b>Honest declaration.</b> Cost: {cost} AP. If challenged ({prob}% chance), reviewer loses 1 AP.
-            </>
-          )}
-          {reviewerHasBurdenOfProof && (
-            <span className="burden-warn">
-              {' '}Burden of Proof active: the reviewer may challenge even at 0 AP, and a hit grants 2 AP.
-            </span>
-          )}
+          <b>{summary.head}</b>
+          {summary.body}
+          {reviewerHasBurdenOfProof && <span className="burden-warn">{t.burdenWarn}</span>}
         </div>
         <div className="modal-actions">
           <button className="btn ghost" onClick={onCancel}>
-            Cancel
+            {t.cancel}
           </button>
           <button className="btn primary" disabled={!affordable} onClick={() => onConfirm(declared)}>
-            Confirm ({cost} AP)
+            {t.confirm(cost)}
           </button>
         </div>
       </div>

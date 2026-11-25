@@ -30,6 +30,7 @@ import {
   type RunState,
 } from './game/run';
 import { defaultRng } from './game/rng';
+import { useT } from './i18n';
 import type { CardId, GameOutcome, GameStats } from './game/types';
 
 type Screen = 'menu' | 'howto' | 'paper_submission' | 'route_map' | 'battle' | 'card_reward' | 'random_event' | 'run_summary';
@@ -68,6 +69,7 @@ const QUICK_RENDER: RenderOptions = {
 };
 
 export default function App() {
+  const t = useT();
   const [screen, setScreen] = useState<Screen>('menu');
   const [author, setAuthor] = useState<AuthorKind>('male');
   const [sfx, setSfx] = useState(true);
@@ -90,7 +92,7 @@ export default function App() {
   const runRef = useRef<RunState | null>(null);
 
   useEffect(() => {
-    preloadTransparent([ASSETS.authorMale, ASSETS.authorFemale, ASSETS.reviewer]);
+    preloadTransparent([ASSETS.authorMale, ASSETS.authorFemale, ASSETS.reviewer, ASSETS.reviewer1]);
   }, []);
 
   const updateRun = (r: RunState | null) => {
@@ -370,8 +372,8 @@ export default function App() {
       {screen === 'card_reward' && run && rewardCards && (
         <CardReward
           cards={[...rewardCards]}
-          title={lastBattleInfo?.outcome === 'accept' ? 'Reviewer #1 — ACCEPT' : 'Reviewer #1 — WEAK ACCEPT'}
-          subtitle={`You recovered ${lastBattleInfo?.healed ?? 0} HP. Choose one card to add to your deck.`}
+          title={t.rewardTitle(lastBattleInfo?.outcome ?? 'weak_accept')}
+          subtitle={t.rewardSub(lastBattleInfo?.healed ?? 0)}
           currentClaimPool={run.claimPool}
           canSkip
           onSelect={chooseReward}
@@ -389,8 +391,8 @@ export default function App() {
         <div className="modal-backdrop">
           <CardReward
             cards={[...pendingChoose]}
-            title="Choose an Advanced Card"
-            subtitle="The cost is already paid. Pick one card — skipping is not allowed."
+            title={t.chooseAdvancedTitle}
+            subtitle={t.chooseAdvancedSub}
             currentClaimPool={run.claimPool}
             canSkip={false}
             onSelect={resolvePendingChoose}
@@ -406,7 +408,7 @@ export default function App() {
           playerHp={quickResult.playerHp}
           rounds={quickResult.rounds}
           stats={quickResult.stats}
-          title={`REVIEWER #2 — ${quickResult.outcome === 'reject' ? 'REJECT' : 'ACCEPT'}`}
+          title={t.quickTitle(quickResult.outcome)}
           onPlayAgain={() => {
             setQuickResult(null);
             setBattleKey((k) => k + 1);
@@ -416,11 +418,11 @@ export default function App() {
       )}
 
       <div className="global-toggles">
-        <button className={`btn tiny ${sfx ? '' : 'ghost'}`} onClick={toggleSfx} title="Toggle sound effects">
-          SFX {sfx ? 'ON' : 'OFF'}
+        <button className={`btn tiny ${sfx ? '' : 'ghost'}`} onClick={toggleSfx} title={t.toggleSfx}>
+          {t.sfx} {sfx ? t.on : t.off}
         </button>
-        <button className={`btn tiny ${music ? '' : 'ghost'}`} onClick={toggleMusic} title="Toggle background music">
-          BGM {music ? 'ON' : 'OFF'}
+        <button className={`btn tiny ${music ? '' : 'ghost'}`} onClick={toggleMusic} title={t.toggleMusic}>
+          {t.bgm} {music ? t.on : t.off}
         </button>
       </div>
     </div>

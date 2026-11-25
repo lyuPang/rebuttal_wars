@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CARDS, CATEGORY_LABEL } from '../game/cards';
+import { CARDS } from '../game/cards';
 import {
   canChallenge,
   canPlayAnything,
@@ -14,7 +14,7 @@ import {
   totalTemporaryShield,
 } from '../game/engine';
 import { buildChallengeView, buildReviewerView, decideReviewerAction, decideReviewerChallenge } from '../game/ai';
-import type { CardId, CardInstance, GameState, Resolution, Side } from '../game/types';
+import type { CardId, CardInstance, Category, GameState, Resolution, Side } from '../game/types';
 import type { ReviewerConfig } from '../game/reviewers';
 import type { RenderOptions } from '../game/run';
 import { audio } from '../audio';
@@ -24,6 +24,7 @@ import { StatusBar } from './StatusBar';
 import { DeclareModal } from './DeclareModal';
 import { ActionLog } from './ActionLog';
 import { CardBack, CardFace } from './Card';
+import { cardText, categoryLabel, reviewerLabel, reviewerLines, reviewerThinkLines, uiText, useLang, useT } from '../i18n';
 
 interface StageCard {
   key: number;
@@ -85,11 +86,14 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
   const [peek, setPeek] = useState<{ cardId: CardId | null } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [logOpen, setLogOpen] = useState(false);
-  const [crossCheckNotice, setCrossCheckNotice] = useState<{ category: string; mismatch: boolean } | null>(null);
+  const [crossCheckNotice, setCrossCheckNotice] = useState<{ category: Category; mismatch: boolean } | null>(null);
   const endedRef = useRef(false);
   const floatId = useRef(1);
   const stageKey = useRef(1);
 
+  const t = useT();
+  const lang = useLang();
+  const rname = reviewerLabel(reviewerProfile.name, lang);
   const authorImg = authorImage(author);
   const reviewerImg = reviewerProfile.id === 'reviewer1' ? ASSETS.reviewer1 : ASSETS.reviewer;
 
@@ -115,7 +119,8 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
 
   const showTurnBanner = useCallback(
     async (side: Side) => {
-      setTurnBanner(side === 'player' ? 'YOUR TURN' : `${reviewerProfile.name.toUpperCase()}'S TURN`);
+      const u = uiText();
+      setTurnBanner(side === 'player' ? u.yourTurnBanner : u.reviewerTurnBanner(reviewerLabel(reviewerProfile.name)));
       audio.play('turn');
       await wait(900);
       if (aliveRef.current) setTurnBanner(null);
@@ -128,30 +133,31 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
   }, [showTurnBanner]);
 
   const addFloats = (res: Resolution) => {
+    const u = uiText();
     const items: FloatText[] = [];
     (['player', 'reviewer'] as Side[]).forEach((side) => {
       const d = res.deltas[side];
       const mk = (text: string, kind: FloatText['kind'], positive: boolean) =>
         items.push({ id: floatId.current++, side, text, kind, positive });
-      if (d.hp) mk(`${d.hp > 0 ? '+' : ''}${d.hp} HP`, 'hp', d.hp > 0);
-      if (d.shield) mk(`${d.shield > 0 ? '+' : ''}${d.shield} Shield`, 'shield', d.shield > 0);
-      if (d.ap) mk(`${d.ap > 0 ? '+' : ''}${d.ap} AP`, 'ap', d.ap > 0);
-      if (d.apDebt) mk(`Debt ${d.apDebt > 0 ? '+' : ''}${d.apDebt}`, 'debt', d.apDebt < 0);
+      if (d.hp) mk(u.floatHp(d.hp), 'hp', d.hp > 0);
+      if (d.shield) mk(u.floatShield(d.shield), 'shield', d.shield > 0);
+      if (d.ap) mk(u.floatAp(d.ap), 'ap', d.ap > 0);
+      if (d.apDebt) mk(u.floatDebt(d.apDebt), 'debt', d.apDebt < 0);
     });
     if (res.cardsDrawn) {
       items.push({
         id: floatId.current++,
         side: res.actorSide,
-        text: `Draw ${res.cardsDrawn}`,
+        text: u.floatDraw(res.cardsDrawn),
         kind: 'info',
         positive: true,
       });
     }
     if (res.crossCheckGranted) {
-      items.push({ id: floatId.current++, side: res.actorSide, text: 'Cross-check +1', kind: 'info', positive: true });
+      items.push({ id: floatId.current++, side: res.actorSide, text: u.floatCrossCheck, kind: 'info', positive: true });
     }
     if (res.burdenOfProofGranted) {
-      items.push({ id: floatId.current++, side: res.actorSide, text: 'Burden of Proof', kind: 'info', positive: true });
+      items.push({ id: floatId.current++, side: res.actorSide, text: u.floatBurden, kind: 'info', positive: true });
     }
     if (!items.length) return;
     setFloats((f) => [...f, ...items]);
@@ -170,11 +176,12 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
   };
 
   const animateResolution = async (res: Resolution) => {
+    const u = uiText();
     const challenger = opponentOf(res.actorSide);
     if (res.challenged) {
       const caught = res.outcome === 'challenge_success';
       setStage((st) => (st ? { ...st, revealedCardId: res.revealedCardId, flipped: true, verdict: caught ? 'caught' : 'false' } : st));
-      setBanner({ text: caught ? 'BLUFF CAUGHT!' : 'FALSE ACCUSATION!', kind: caught ? 'caught' : 'false' });
+      setBanner({ text: caught ? u.bannerCaught : u.bannerFalse, kind: caught ? 'caught' : 'false' });
       setStatus({
         [challenger]: caught ? 'challenge_success' : 'challenge_fail',
         [res.actorSide]: caught ? 'challenge_fail' : 'challenge_success',
@@ -183,7 +190,7 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
       await wait(1300);
     } else {
       setStage((st) => (st ? { ...st, verdict: 'accepted' } : st));
-      setBanner({ text: 'CLAIM ACCEPTED!', kind: 'accepted' });
+      setBanner({ text: u.bannerAccepted, kind: 'accepted' });
       audio.play('accept');
       await wait(750);
     }
@@ -195,8 +202,8 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
       next[res.actorSide] = 'attack';
       next[res.damage.target] = res.damage.hpLoss > 0 ? 'damage' : 'block';
       audio.play(res.damage.hpLoss > 0 ? 'hit' : 'block');
-      if (res.damage.absorbed > 0) showFloat(res.damage.target, `Shield absorbed ${res.damage.absorbed}`, 'shield', true);
-      if (res.damage.pierce && res.damage.hpLoss > 0) showFloat(res.damage.target, 'PIERCE!', 'info', false);
+      if (res.damage.absorbed > 0) showFloat(res.damage.target, u.floatAbsorbed(res.damage.absorbed), 'shield', true);
+      if (res.damage.pierce && res.damage.hpLoss > 0) showFloat(res.damage.target, u.floatPierce, 'info', false);
     } else if (eff.kind === 'shield') {
       next[res.actorSide] = 'defense';
       audio.play('shield');
@@ -210,7 +217,7 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
       audio.play('peek');
     }
     if (res.usedBurdenOfProof) {
-      showFloat(opponentOf(res.actorSide), 'Burden of Proof used', 'info', true);
+      showFloat(opponentOf(res.actorSide), u.floatBurdenUsed, 'info', true);
     }
     setStatus(next);
     addFloats(res);
@@ -227,8 +234,8 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
     if (res.actorSide === 'reviewer' && eff.kind === 'peek') {
       setToast(
         res.peekedCardId === undefined || res.peekedCardId === null
-          ? `${reviewerProfile.name} tried to peek at your hand, but it was empty.`
-          : `${reviewerProfile.name} peeked at one of your cards...`,
+          ? u.toastPeekEmpty(reviewerLabel(reviewerProfile.name))
+          : u.toastPeeked(reviewerLabel(reviewerProfile.name)),
       );
       window.setTimeout(() => aliveRef.current && setToast(null), 2200);
     }
@@ -250,12 +257,12 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
     return true;
   };
 
-  const showCrossCheckNotice = (revealed: string | null, declared: CardId) => {
+  const showCrossCheckNotice = (revealed: Category | null, declared: CardId) => {
     if (!revealed) {
       setCrossCheckNotice(null);
       return;
     }
-    const mismatch = revealed !== CATEGORY_LABEL[CARDS[declared].category];
+    const mismatch = revealed !== CARDS[declared].category;
     setCrossCheckNotice({ category: revealed, mismatch });
   };
 
@@ -278,13 +285,13 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
       flipped: false,
       verdict: 'pending',
     });
-    setSpeech({ player: CARDS[declared].flavor, reviewer: null });
+    setSpeech({ player: cardText(declared).flavor, reviewer: null });
     await wait(800);
     if (!aliveRef.current) return;
 
     const csCategory = r.state.pendingPlay?.crossCheckRevealedCategory ?? null;
     if (csCategory) {
-      showCrossCheckNotice(CATEGORY_LABEL[csCategory], declared);
+      showCrossCheckNotice(csCategory, declared);
       await wait(1100);
       setCrossCheckNotice(null);
       if (!aliveRef.current) return;
@@ -298,12 +305,15 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
     setStatus((s) => ({ ...s, reviewer: 'think' }));
     setSpeech({
       player: null,
-      reviewer: reviewerProfile.thinkLines[Math.floor(Math.random() * reviewerProfile.thinkLines.length)],
+      reviewer: (() => {
+        const lines = reviewerThinkLines(reviewerProfile);
+        return lines[Math.floor(Math.random() * lines.length)];
+      })(),
     });
     await wait(900);
     if (!aliveRef.current) return;
     const challenge = decideReviewerChallenge(view, ctx);
-    setSpeech({ player: null, reviewer: challenge ? 'I CHALLENGE that!' : 'Fine. Accepted.' });
+    setSpeech({ player: null, reviewer: challenge ? uiText().speechReviewerChallenge : uiText().speechReviewerAccept });
     await wait(500);
     const res = respondToPlay(gameRef.current, challenge, ctx);
     if (!res.ok) {
@@ -324,7 +334,7 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
     if (challenge && !canChallenge(s.player, ctx)) return;
 
     if (s.pendingPlay?.crossCheckRevealedCategory) {
-      showCrossCheckNotice(CATEGORY_LABEL[s.pendingPlay.crossCheckRevealedCategory], s.pendingPlay.declaredCardId);
+      showCrossCheckNotice(s.pendingPlay.crossCheckRevealedCategory, s.pendingPlay.declaredCardId);
       await wait(900);
       setCrossCheckNotice(null);
       if (!aliveRef.current) return;
@@ -332,7 +342,7 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
 
     setBusy(true);
     audio.play('click');
-    setSpeech({ player: challenge ? 'Objection!' : 'Fair enough.', reviewer: null });
+    setSpeech({ player: challenge ? uiText().speechPlayerChallenge : uiText().speechPlayerAccept, reviewer: null });
     const res = respondToPlay(s, challenge, ctx);
     if (!res.ok) {
       setBusy(false);
@@ -371,7 +381,7 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
       const r = endTurn(gameRef.current, 'reviewer', ctx);
       if (r.ok) {
         commit(r.state);
-        setSpeech({ player: null, reviewer: 'I am done. For now.' });
+        setSpeech({ player: null, reviewer: uiText().speechReviewerDone });
         await wait(700);
         setSpeech({ player: null, reviewer: null });
         if (await finishBattleIfNeeded()) {
@@ -393,7 +403,7 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
     commit(r.state);
     audio.play('play');
     showFloat('reviewer', `-${r.state.pendingPlay!.declaredCost} AP`, 'ap', false);
-    const lines = reviewerProfile.lines[action.declaredCardId] ?? ['...'];
+    const lines = reviewerLines(reviewerProfile, action.declaredCardId);
     setSpeech({ player: null, reviewer: lines[Math.floor(Math.random() * lines.length)] });
     setStage({
       key: stageKey.current++,
@@ -429,7 +439,7 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
   const pendingDeclared = game.pendingPlay ? CARDS[game.pendingPlay.declaredCardId] : null;
   const pendingCsCategory = game.pendingPlay?.crossCheckRevealedCategory ?? null;
   const pendingCsMismatch =
-    pendingCsCategory && pendingDeclared ? CATEGORY_LABEL[pendingCsCategory] !== pendingDeclared.category : false;
+    pendingCsCategory && pendingDeclared ? pendingCsCategory !== pendingDeclared.category : false;
 
   return (
     <div className="game-screen">
@@ -437,16 +447,14 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
 
       <div className="stage stage-bg">
         <div className="stage-screen">
-          <div className="screen-title">REBUTTAL SESSION</div>
-          <div className="screen-sub">
-            Paper #4242 · {reviewerProfile.id === 'reviewer1' ? 'First Review' : 'Final Rebuttal'}
-          </div>
+          <div className="screen-title">{t.sessionTitle}</div>
+          <div className="screen-sub">{t.sessionSub(reviewerProfile.id === 'reviewer1')}</div>
         </div>
 
         <Character
           side="player"
           img={authorImg}
-          name="Author"
+          name={t.author}
           status={status.player}
           shield={totalTemporaryShield(game.player) + totalPermanentShield(game.player)}
           floats={floats.filter((f) => f.side === 'player')}
@@ -457,7 +465,7 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
         <Character
           side="reviewer"
           img={reviewerImg}
-          name={reviewerProfile.name}
+          name={rname}
           status={status.reviewer}
           shield={totalTemporaryShield(game.reviewer) + totalPermanentShield(game.reviewer)}
           floats={floats.filter((f) => f.side === 'reviewer')}
@@ -470,20 +478,24 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
           {stage && (
             <div className={`stage-card from-${stage.actorSide}`} key={stage.key}>
               <div className="declare-label">
-                {stage.actorSide === 'player' ? 'You declare' : `${reviewerProfile.name} declares`}:{' '}
-                <b className={`cat-text-${CARDS[stage.declaredCardId].category}`}>{CARDS[stage.declaredCardId].name}!</b>
+                {stage.actorSide === 'player' ? t.youDeclare : t.reviewerDeclares(rname)}
+                {lang === 'zh' ? '：' : ': '}
+                <b className={`cat-text-${CARDS[stage.declaredCardId].category}`}>
+                  {cardText(stage.declaredCardId, lang).name}
+                  {lang === 'zh' ? '！' : '!'}
+                </b>
               </div>
               <div className={`flip-card ${stage.flipped ? 'flipped' : ''}`}>
                 <div className="flip-inner">
                   <div className="flip-front">
                     <CardBack />
-                    {stage.verdict === 'accepted' && <div className="card-stamp accepted">ACCEPTED</div>}
+                    {stage.verdict === 'accepted' && <div className="card-stamp accepted">{t.stampAccepted}</div>}
                   </div>
                   <div className="flip-back">
                     {stage.revealedCardId && (
                       <CardFace
                         cardId={stage.revealedCardId}
-                        stamp={stage.verdict === 'caught' ? 'BLUFF' : stage.verdict === 'false' ? 'TRUE' : undefined}
+                        stamp={stage.verdict === 'caught' ? t.stampBluff : stage.verdict === 'false' ? t.stampTrue : undefined}
                       />
                     )}
                   </div>
@@ -491,55 +503,57 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
               </div>
               {stage.ownActualCardId && !stage.flipped && (
                 <div className="own-actual">
-                  Your actual card: {CARDS[stage.ownActualCardId].name}
-                  {stage.ownActualCardId !== stage.declaredCardId ? ' (bluffing...)' : ''}
+                  {t.yourActualCard} {cardText(stage.ownActualCardId, lang).name}
+                  {stage.ownActualCardId !== stage.declaredCardId ? t.bluffing : ''}
                 </div>
               )}
-              <div className="declared-effect">Declared effect: {CARDS[stage.declaredCardId].description}</div>
+              <div className="declared-effect">
+                {t.declaredEffect} {cardText(stage.declaredCardId, lang).description}
+              </div>
             </div>
           )}
 
           {crossCheckNotice && (
             <div className={`crosscheck-notice ${crossCheckNotice.mismatch ? 'mismatch' : 'match'}`}>
-              <div className="cs-title">CROSS-CHECK</div>
+              <div className="cs-title">{t.crossCheck}</div>
               <div className="cs-body">
-                Actual card category: <b>{crossCheckNotice.category}</b>
+                {t.actualCategory} <b>{categoryLabel(crossCheckNotice.category, lang)}</b>
               </div>
-              {crossCheckNotice.mismatch && <div className="cs-warn">⚠ Category mismatch detected!</div>}
+              {crossCheckNotice.mismatch && <div className="cs-warn">{t.categoryMismatch}</div>}
             </div>
           )}
 
           {awaitingPlayer && game.pendingPlay && pendingDeclared && (
             <div className="respond-panel">
               <div className="respond-title">
-                {reviewerProfile.name} declares: <b>{pendingDeclared.name}</b>
+                {t.reviewerDeclares(rname)}
+                {lang === 'zh' ? '：' : ': '}
+                <b>{cardText(pendingDeclared.id, lang).name}</b>
               </div>
               {pendingCsCategory && (
                 <div className={`respond-crosscheck ${pendingCsMismatch ? 'mismatch' : ''}`}>
-                  CROSS-CHECK reveals: <b>{CATEGORY_LABEL[pendingCsCategory]}</b>
-                  {pendingCsMismatch ? ' — declared category differs!' : ''}
+                  {t.crossCheckReveals} <b>{categoryLabel(pendingCsCategory, lang)}</b>
+                  {pendingCsMismatch ? t.declaredDiffers : ''}
                 </div>
               )}
               <div className="respond-hint">
-                Challenge success: +1 AP, reviewer penalized, actual card resolves. Challenge fail: -1 AP.
-                {playerFreeChallenge && (
-                  <span className="burden-hint"> Burden of Proof: free challenge, success grants +2 AP.</span>
-                )}
+                {t.respondHint}
+                {playerFreeChallenge && <span className="burden-hint">{t.burdenHint}</span>}
               </div>
               <div className="respond-actions">
                 <button className="btn accept-btn" onClick={() => void playerRespond(false)}>
-                  Accept
+                  {t.accept}
                 </button>
                 <button
                   className={`btn challenge-btn ${playerFreeChallenge ? 'free' : ''}`}
                   disabled={!playerCanChallenge}
                   onClick={() => void playerRespond(true)}
-                  title={playerCanChallenge ? '' : 'Need at least 1 AP to challenge'}
+                  title={playerCanChallenge ? '' : t.needApToChallenge}
                 >
-                  {playerFreeChallenge ? 'Special Challenge' : 'Challenge'}
+                  {playerFreeChallenge ? t.specialChallenge : t.challenge}
                 </button>
               </div>
-              {!playerCanChallenge && <div className="respond-warn">You have 0 AP and no Burden of Proof</div>}
+              {!playerCanChallenge && <div className="respond-warn">{t.noApNoBurden}</div>}
             </div>
           )}
 
@@ -557,17 +571,17 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
       <div className="hand-area">
         <div className="hand-controls">
           <button className="btn small ghost" onClick={() => setLogOpen((o) => !o)}>
-            {logOpen ? 'Hide Log' : 'Action Log'}
+            {logOpen ? t.hideLog : t.actionLog}
           </button>
-          <button className="btn small ghost" onClick={cycleSpeed} title="Speed up animations">
-            Speed x{speed}
+          <button className="btn small ghost" onClick={cycleSpeed} title={t.speedTitle}>
+            {t.speed(speed)}
           </button>
           <button className="btn small ghost" onClick={onMenu}>
-            Menu
+            {t.menu}
           </button>
         </div>
         <div className="hand">
-          {p.hand.length === 0 && <div className="hand-empty">No cards in hand</div>}
+          {p.hand.length === 0 && <div className="hand-empty">{t.noCards}</div>}
           {p.hand.map((card, i) => {
             const cost = getCost(p, card.cardId, ctx);
             const disabled = !isPlayerTurn || !canPlay;
@@ -590,23 +604,23 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
         <div className="end-turn-wrap">
           <div className="turn-hint">
             {over
-              ? 'Battle over'
+              ? t.hintOver
               : game.phase === 'player_turn'
                 ? canPlay
-                  ? 'Pick a card to play, or end your turn'
-                  : 'Not enough AP to play anything'
+                  ? t.hintPick
+                  : t.hintNoAp
                 : game.phase === 'awaiting_player_challenge'
-                  ? 'Respond to the reviewer declaration'
+                  ? t.hintRespond
                   : game.phase === 'awaiting_reviewer_challenge' || busy
-                    ? 'Resolving...'
-                    : `${reviewerProfile.name} is acting...`}
+                    ? t.hintResolving
+                    : t.hintActing(rname)}
           </div>
           <button
             className={`btn end-turn ${isPlayerTurn && !canPlay ? 'pulse' : ''}`}
             disabled={!isPlayerTurn}
             onClick={() => void playerEndTurn()}
           >
-            End Turn
+            {t.endTurn}
           </button>
         </div>
       </div>
@@ -628,18 +642,18 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
       {peek && (
         <div className="modal-backdrop" onClick={() => setPeek(null)}>
           <div className="modal peek-modal" onClick={(e) => e.stopPropagation()}>
-            <h2>Investigation Result</h2>
+            <h2>{t.investigationResult}</h2>
             {peek.cardId ? (
               <>
-                <p>You peeked at one of {reviewerProfile.name}'s cards:</p>
+                <p>{t.peekedAt(rname)}</p>
                 <CardFace cardId={peek.cardId} />
               </>
             ) : (
-              <p>{reviewerProfile.name} has no cards in hand. Investigation found nothing.</p>
+              <p>{t.peekNothing(rname)}</p>
             )}
             <div className="modal-actions">
               <button className="btn primary" onClick={() => setPeek(null)}>
-                Got it
+                {t.gotIt}
               </button>
             </div>
           </div>

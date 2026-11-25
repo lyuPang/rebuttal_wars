@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { HistoryEntry } from '../game/types';
+import { useT } from '../i18n';
 
 interface Props {
   history: HistoryEntry[];
@@ -8,6 +9,7 @@ interface Props {
 }
 
 export function ActionLog({ history, open, onClose }: Props) {
+  const t = useT();
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (open) endRef.current?.scrollIntoView({ block: 'end' });
@@ -15,9 +17,9 @@ export function ActionLog({ history, open, onClose }: Props) {
   return (
     <aside className={`action-log ${open ? 'open' : ''}`}>
       <div className="log-header">
-        <span>Action Log</span>
+        <span>{t.actionLog}</span>
         <button className="btn tiny ghost" onClick={onClose}>
-          收起
+          {t.hide}
         </button>
       </div>
       <div className="log-body">

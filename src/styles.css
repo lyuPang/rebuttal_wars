@@ -200,6 +200,13 @@ button {
   padding: 8px 14px;
   border-radius: 8px;
 }
+.start-picks {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 14px;
+  z-index: 2;
+}
 .start-menu {
   display: flex;
   flex-direction: column;

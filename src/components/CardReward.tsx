@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { CardId } from '../game/types';
 import { CardFace } from './Card';
 import { audio } from '../audio';
+import { useT } from '../i18n';
 
 interface Props {
   cards: CardId[];
@@ -14,6 +15,7 @@ interface Props {
 }
 
 export function CardReward({ cards, title, subtitle, currentClaimPool, canSkip, onSelect, onSkip }: Props) {
+  const t = useT();
   const [selected, setSelected] = useState<CardId | null>(null);
 
   return (
@@ -34,7 +36,7 @@ export function CardReward({ cards, title, subtitle, currentClaimPool, canSkip, 
             >
               <CardFace cardId={id} />
               <div className="reward-unlock-status">
-                {alreadyUnlocked ? '✓ Claim already unlocked' : '★ New claim will be unlocked'}
+                {alreadyUnlocked ? t.claimUnlocked : t.claimNew}
               </div>
             </button>
           );
@@ -44,7 +46,7 @@ export function CardReward({ cards, title, subtitle, currentClaimPool, canSkip, 
       <div className="reward-actions">
         {canSkip && onSkip && (
           <button className="btn ghost" onClick={() => { audio.play('click'); onSkip(); }}>
-            Skip Reward
+            {t.skipReward}
           </button>
         )}
         <button
@@ -52,7 +54,7 @@ export function CardReward({ cards, title, subtitle, currentClaimPool, canSkip, 
           disabled={!selected}
           onClick={() => { if (selected) { audio.play('click'); onSelect(selected); } }}
         >
-          Select Card
+          {t.selectCard}
         </button>
       </div>
     </div>

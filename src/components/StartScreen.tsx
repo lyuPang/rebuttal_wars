@@ -2,6 +2,7 @@ import type { AuthorKind } from '../assets';
 import { ASSETS, authorImage } from '../assets';
 import { useTransparentImage } from '../hooks/useTransparentImage';
 import { audio } from '../audio';
+import { setLang, useLang, useT, type Lang } from '../i18n';
 
 interface Props {
   author: AuthorKind;
@@ -15,19 +16,26 @@ interface Props {
   onToggleMusic: () => void;
 }
 
+const LANG_OPTIONS: { id: Lang; label: string }[] = [
+  { id: 'en', label: 'English' },
+  { id: 'zh', label: '中文' },
+];
+
 function Portrait({ src, className }: { src: string; className: string }) {
   const t = useTransparentImage(src);
   return <img className={className} src={t} alt="" draggable={false} />;
 }
 
 export function StartScreen({ author, onAuthor, onStart, onQuick, onHowTo, sfx, music, onToggleSfx, onToggleMusic }: Props) {
+  const t = useT();
+  const lang = useLang();
   return (
     <div className="start-screen stage-bg">
       <div className="title-block">
-        <div className="title-small">A Bluffing Card Game of Peer Review</div>
+        <div className="title-small">{t.tagline}</div>
         <h1 className="title">
           REBUTTAL WARS
-          <span className="title-sub">Reviewer #2 · V2</span>
+          <span className="title-sub">{t.titleSub}</span>
         </h1>
       </div>
       <div className="start-figures">
@@ -35,8 +43,25 @@ export function StartScreen({ author, onAuthor, onStart, onQuick, onHowTo, sfx, 
         <div className="vs">VS</div>
         <Portrait src={ASSETS.reviewer} className="start-reviewer" />
       </div>
+      <div className="start-picks">
+      <div className="author-pick lang-pick">
+        <span>{lang === 'zh' ? '语言 / Language：' : 'Language / 语言:'}</span>
+        {LANG_OPTIONS.map((o) => (
+          <button
+            key={o.id}
+            className={`btn small ${lang === o.id ? 'primary' : 'ghost'}`}
+            aria-pressed={lang === o.id}
+            onClick={() => {
+              audio.play('click');
+              setLang(o.id);
+            }}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
       <div className="author-pick">
-        <span>Choose your author:</span>
+        <span>{t.chooseAuthor}</span>
         {(['male', 'female'] as AuthorKind[]).map((k) => (
           <button
             key={k}
@@ -46,26 +71,27 @@ export function StartScreen({ author, onAuthor, onStart, onQuick, onHowTo, sfx, 
               onAuthor(k);
             }}
           >
-            {k === 'male' ? 'Author (M)' : 'Author (F)'}
+            {k === 'male' ? t.authorMale : t.authorFemale}
           </button>
         ))}
       </div>
+      </div>
       <div className="start-menu">
         <button className="btn big primary" onClick={onStart}>
-          Conference Run
+          {t.conferenceRun}
         </button>
         <button className="btn big" onClick={onQuick}>
-          Quick Rebuttal
+          {t.quickRebuttal}
         </button>
         <button className="btn big" onClick={onHowTo}>
-          How to Play
+          {t.howToPlay}
         </button>
         <div className="toggles">
           <button className={`btn small ${sfx ? '' : 'ghost'}`} onClick={onToggleSfx}>
-            SFX: {sfx ? 'ON' : 'OFF'}
+            {t.sfx}: {sfx ? t.on : t.off}
           </button>
           <button className={`btn small ${music ? '' : 'ghost'}`} onClick={onToggleMusic}>
-            Music: {music ? 'ON' : 'OFF'}
+            {t.music}: {music ? t.on : t.off}
           </button>
         </div>
       </div>
