@@ -32,7 +32,6 @@ export function StartScreen({ author, onAuthor, onStart, onQuick, onHowTo, sfx, 
   return (
     <div className="start-screen stage-bg">
       <div className="title-block">
-        <div className="title-small">{t.tagline}</div>
         <h1 className="title">
           REBUTTAL WARS
           <span className="title-sub">{t.titleSub}</span>

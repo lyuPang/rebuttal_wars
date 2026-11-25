@@ -11,8 +11,7 @@ interface OutcomeText {
 
 const en = {
   langLabel: 'Language',
-  tagline: 'A Bluffing Card Game of Peer Review',
-  titleSub: 'Reviewer #2 · V2',
+  titleSub: 'Reviewer #2',
   chooseAuthor: 'Choose your author:',
   authorMale: 'Author (M)',
   authorFemale: 'Author (F)',
@@ -249,8 +248,7 @@ export type UiText = typeof en;
 
 const zh: UiText = {
   langLabel: '语言',
-  tagline: '一款关于同行评审的诈唬卡牌游戏',
-  titleSub: '审稿人 #2 · V2',
+  titleSub: '审稿人 #2',
   chooseAuthor: '选择你的作者：',
   authorMale: '作者（男）',
   authorFemale: '作者（女）',

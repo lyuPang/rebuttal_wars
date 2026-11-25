@@ -87,11 +87,15 @@ describe('i18n — language switching', () => {
       }),
     );
     expect(screen.getByText('Conference Run')).toBeTruthy();
+    expect(screen.queryByText('A Bluffing Card Game of Peer Review')).toBeNull();
+    expect(screen.queryByText('Reviewer #2 · V2')).toBeNull();
     fireEvent.click(screen.getByText('中文'));
     expect(getLang()).toBe('zh');
     expect(window.localStorage.getItem('rebuttal_wars.lang')).toBe('zh');
     expect(screen.getByText('会议投稿之旅')).toBeTruthy();
     expect(screen.getByText('快速 Rebuttal')).toBeTruthy();
+    expect(screen.queryByText('一款关于同行评审的诈唬卡牌游戏')).toBeNull();
+    expect(screen.queryByText('审稿人 #2 · V2')).toBeNull();
     expect(document.documentElement.lang).toBe('zh-CN');
     fireEvent.click(screen.getByText('English'));
     expect(screen.getByText('Conference Run')).toBeTruthy();
