@@ -1914,6 +1914,30 @@ button {
 .route-stats b {
   color: var(--gold);
 }
+.route-main {
+  flex: 1;
+  width: 100%;
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.route-hint {
+  margin: 0 0 12px;
+  color: var(--parchment);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-align: center;
+}
+.route-hint::before {
+  content: '▼';
+  display: block;
+  margin-bottom: 8px;
+  color: var(--gold);
+  font-size: 18px;
+}
 .route-path {
   display: flex;
   align-items: center;
@@ -2036,6 +2060,23 @@ button {
 .route-actions {
   display: flex;
   gap: 12px;
+}
+.route-menu-button {
+  margin-top: auto;
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  color: #c9b995;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.75;
+  transition: color 0.15s, opacity 0.15s, border-color 0.15s;
+}
+.route-menu-button:hover {
+  color: var(--parchment);
+  border-bottom-color: var(--parchment-dark);
+  opacity: 1;
 }
 
 /* Card reward */

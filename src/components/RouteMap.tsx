@@ -62,14 +62,17 @@ export function RouteMap({ run, onEnterNode, onViewDeck, onMenu }: Props) {
         </div>
       </div>
 
-      <div className="route-path">
-        {run.nodes.map((node, i) => (
-          <div key={node.index} className="route-step">
-            <NodeDisplay node={node} onClick={() => { audio.play('click'); onEnterNode(node.index); }} />
-            {i < run.nodes.length - 1 && <div className={`route-link ${node.status === 'completed' ? 'done' : ''}`} />}
-          </div>
-        ))}
-      </div>
+      <main className="route-main">
+        <p className="route-hint">{t.routeHint}</p>
+        <div className="route-path">
+          {run.nodes.map((node, i) => (
+            <div key={node.index} className="route-step">
+              <NodeDisplay node={node} onClick={() => { audio.play('click'); onEnterNode(node.index); }} />
+              {i < run.nodes.length - 1 && <div className={`route-link ${node.status === 'completed' ? 'done' : ''}`} />}
+            </div>
+          ))}
+        </div>
+      </main>
 
       <div className="route-modifiers">
         {run.pendingBattleModifiers.startingApDelta !== 0 && (
@@ -98,9 +101,9 @@ export function RouteMap({ run, onEnterNode, onViewDeck, onMenu }: Props) {
       </div>
 
       <div className="route-actions">
-        <button className="btn ghost" onClick={onMenu}>{t.mainMenu}</button>
         <button className="btn" onClick={() => { audio.play('click'); onViewDeck(); }}>{t.viewDeck}</button>
       </div>
+      <button className="route-menu-button" onClick={onMenu}>{t.mainMenu}</button>
     </div>
   );
 }
