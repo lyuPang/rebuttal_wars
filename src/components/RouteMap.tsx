@@ -3,6 +3,7 @@ import { CARDS } from '../game/cards';
 import { ADVANCED_CARD_IDS } from '../game/cards';
 import { audio } from '../audio';
 import { cardName, paperText, useLang, useT } from '../i18n';
+import { CardNameTooltip } from './CardNameTooltip';
 
 interface Props {
   run: RunState;
@@ -93,9 +94,13 @@ export function RouteMap({ run, onEnterNode, onViewDeck, onMenu }: Props) {
         <div className="claim-summary-title">{t.claimPool(run.claimPool.length)}</div>
         <div className="claim-summary-list">
           {run.claimPool.map((id) => (
-            <span key={id} className={`claim-chip cat-${CARDS[id].category} ${CARDS[id].isAdvanced ? 'advanced' : ''}`}>
+            <CardNameTooltip
+              key={id}
+              cardId={id}
+              className={`claim-chip cat-${CARDS[id].category} ${CARDS[id].isAdvanced ? 'advanced' : ''}`}
+            >
               {cardName(id, lang)}
-            </span>
+            </CardNameTooltip>
           ))}
         </div>
       </div>

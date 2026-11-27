@@ -101,6 +101,56 @@ button {
   opacity: 0.85;
 }
 
+.card-name-tooltip {
+  position: relative;
+  display: inline-block;
+  font-weight: 700;
+  cursor: help;
+}
+.card-name-tooltip:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+}
+.card-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 10px);
+  z-index: 250;
+  width: max-content;
+  max-width: min(340px, 80vw);
+  padding: 10px 12px;
+  border: 2px solid var(--gold);
+  border-radius: 6px;
+  background: rgba(20, 12, 8, 0.98);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.6);
+  color: var(--parchment);
+  text-align: left;
+  white-space: normal;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, 4px);
+  transition: opacity 0.12s, transform 0.12s, visibility 0.12s;
+}
+.card-tooltip strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--gold);
+  font-size: 13px;
+}
+.card-tooltip > span {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+.card-name-tooltip:hover > .card-tooltip,
+.card-name-tooltip:focus-within > .card-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+}
+
 /* ---------- Background ---------- */
 .stage-bg {
   background:

@@ -24,6 +24,7 @@ import { StatusBar } from './StatusBar';
 import { DeclareModal } from './DeclareModal';
 import { ActionLog } from './ActionLog';
 import { CardBack, CardFace } from './Card';
+import { CardNameTooltip } from './CardNameTooltip';
 import { cardText, categoryLabel, reviewerLabel, reviewerLines, reviewerThinkLines, uiText, useLang, useT } from '../i18n';
 
 interface StageCard {
@@ -480,10 +481,13 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
               <div className="declare-label">
                 {stage.actorSide === 'player' ? t.youDeclare : t.reviewerDeclares(rname)}
                 {lang === 'zh' ? '：' : ': '}
-                <b className={`cat-text-${CARDS[stage.declaredCardId].category}`}>
+                <CardNameTooltip
+                  cardId={stage.declaredCardId}
+                  className={`cat-text-${CARDS[stage.declaredCardId].category}`}
+                >
                   {cardText(stage.declaredCardId, lang).name}
                   {lang === 'zh' ? '！' : '!'}
-                </b>
+                </CardNameTooltip>
               </div>
               <div className={`flip-card ${stage.flipped ? 'flipped' : ''}`}>
                 <div className="flip-inner">
@@ -528,7 +532,9 @@ export function GameScreen({ author, reviewerProfile, render, onBattleEnd, onMen
               <div className="respond-title">
                 {t.reviewerDeclares(rname)}
                 {lang === 'zh' ? '：' : ': '}
-                <b>{cardText(pendingDeclared.id, lang).name}</b>
+                <CardNameTooltip cardId={pendingDeclared.id}>
+                  {cardText(pendingDeclared.id, lang).name}
+                </CardNameTooltip>
               </div>
               {pendingCsCategory && (
                 <div className={`respond-crosscheck ${pendingCsMismatch ? 'mismatch' : ''}`}>
